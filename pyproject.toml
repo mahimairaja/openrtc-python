@@ -40,7 +40,7 @@ source = "vcs"
 root = "../.."
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/envoic/_version.py"
+version-file = "src/openrtc_python/_version.py"
 
 [tool.pyright]
 typeCheckingMode = "off"
