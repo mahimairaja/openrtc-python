@@ -3,16 +3,23 @@
 OpenRTC is a Python framework for running multiple LiveKit voice agents in a
 single worker process with shared prewarmed models.
 
-## Shared provider defaults
+## Decorator-based discovery with shared defaults
 
-When multiple agents use the same STT, LLM, or TTS providers, configure those
-once on `AgentPool` and let discovered agent modules override only the values
-that differ.
+Use `@agent_config(...)` on a standard LiveKit `Agent` subclass to attach
+optional discovery metadata. Then set shared providers once on `AgentPool` and
+only override the values that differ per agent.
 
 ```python
 from pathlib import Path
 
-from openrtc import AgentPool
+from openrtc import AgentPool, agent_config
+from livekit.agents import Agent
+
+
+@agent_config(name="restaurant")
+class RestaurantAgent(Agent):
+    ...
+
 
 pool = AgentPool(
     default_stt="deepgram/nova-3:multi",
@@ -32,3 +39,6 @@ openrtc list \
   --default-llm openai/gpt-4.1-mini \
   --default-tts cartesia/sonic-3
 ```
+
+For backward compatibility, discovery still supports legacy module-level
+`AGENT_*` variables, but the decorator is the preferred pattern.

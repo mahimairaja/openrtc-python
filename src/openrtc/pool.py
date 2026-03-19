@@ -3,15 +3,18 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, TypeVar
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, cli
 
 logger = logging.getLogger("openrtc")
+
+_AgentType = TypeVar("_AgentType", bound=type[Agent])
+_AGENT_METADATA_ATTR = "__openrtc_agent_config__"
 
 
 @dataclass(slots=True)
@@ -33,6 +36,62 @@ class AgentConfig:
     llm: Any = None
     tts: Any = None
     greeting: str | None = None
+
+
+@dataclass(slots=True)
+class AgentDiscoveryConfig:
+    """Optional metadata attached to an ``Agent`` class for discovery.
+
+    Args:
+        name: Optional explicit agent name. Falls back to the module filename when
+            omitted.
+        stt: Optional STT provider override.
+        llm: Optional LLM provider override.
+        tts: Optional TTS provider override.
+        greeting: Optional greeting override.
+    """
+
+    name: str | None = None
+    stt: Any = None
+    llm: Any = None
+    tts: Any = None
+    greeting: str | None = None
+
+
+def agent_config(
+    *,
+    name: str | None = None,
+    stt: Any = None,
+    llm: Any = None,
+    tts: Any = None,
+    greeting: str | None = None,
+) -> Callable[[_AgentType], _AgentType]:
+    """Attach OpenRTC discovery metadata to a standard LiveKit ``Agent`` class.
+
+    Args:
+        name: Optional explicit agent name used during discovery.
+        stt: Optional STT provider override.
+        llm: Optional LLM provider override.
+        tts: Optional TTS provider override.
+        greeting: Optional greeting override.
+
+    Returns:
+        A decorator that stores OpenRTC discovery metadata on the class.
+    """
+
+    metadata = AgentDiscoveryConfig(
+        name=_normalize_optional_name(name, field_name="name"),
+        stt=stt,
+        llm=llm,
+        tts=tts,
+        greeting=_normalize_optional_name(greeting, field_name="greeting"),
+    )
+
+    def decorator(agent_cls: _AgentType) -> _AgentType:
+        setattr(agent_cls, _AGENT_METADATA_ATTR, metadata)
+        return agent_cls
+
+    return decorator
 
 
 class AgentPool:
@@ -147,14 +206,15 @@ class AgentPool:
 
             module = self._load_agent_module(module_path)
             agent_cls = self._find_local_agent_subclass(module)
-            agent_name = self._read_module_str(module, "AGENT_NAME") or module_path.stem
+            metadata = self._resolve_discovery_metadata(module, agent_cls)
+            agent_name = metadata.name or module_path.stem
             config = self.add(
                 agent_name,
                 agent_cls,
-                stt=getattr(module, "AGENT_STT", None),
-                llm=getattr(module, "AGENT_LLM", None),
-                tts=getattr(module, "AGENT_TTS", None),
-                greeting=self._read_module_str(module, "AGENT_GREETING"),
+                stt=metadata.stt,
+                llm=metadata.llm,
+                tts=metadata.tts,
+                greeting=metadata.greeting,
             )
             logger.info(
                 "Discovered agent '%s' from %s using class %s.",
@@ -270,6 +330,23 @@ class AgentPool:
     def _resolve_greeting(self, greeting: str | None) -> str | None:
         return self._default_greeting if greeting is None else greeting
 
+    def _resolve_discovery_metadata(
+        self,
+        module: ModuleType,
+        agent_cls: type[Agent],
+    ) -> AgentDiscoveryConfig:
+        metadata = getattr(agent_cls, _AGENT_METADATA_ATTR, None)
+        if metadata is not None:
+            return metadata
+
+        return AgentDiscoveryConfig(
+            name=self._read_module_str(module, "AGENT_NAME"),
+            stt=getattr(module, "AGENT_STT", None),
+            llm=getattr(module, "AGENT_LLM", None),
+            tts=getattr(module, "AGENT_TTS", None),
+            greeting=self._read_module_str(module, "AGENT_GREETING"),
+        )
+
     def _load_agent_module(self, module_path: Path) -> ModuleType:
         module_name = f"openrtc_discovered_{module_path.stem}"
         spec = importlib.util.spec_from_file_location(module_name, module_path)
@@ -303,17 +380,7 @@ class AgentPool:
         value = getattr(module, attribute_name, None)
         if value is None:
             return None
-        if not isinstance(value, str):
-            raise RuntimeError(
-                f"Module '{module.__name__}' has non-string {attribute_name!r}: "
-                f"{type(value).__name__}."
-            )
-        normalized_value = value.strip()
-        if not normalized_value:
-            raise RuntimeError(
-                f"Module '{module.__name__}' defines empty {attribute_name!r}."
-            )
-        return normalized_value
+        return _normalize_optional_name(value, field_name=attribute_name)
 
     def _load_shared_runtime_dependencies(self) -> tuple[Any, type[Any]]:
         """Load the optional LiveKit runtime dependencies used during prewarm.
@@ -335,3 +402,17 @@ class AgentPool:
             ) from exc
 
         return silero, MultilingualModel
+
+
+def _normalize_optional_name(value: Any, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise RuntimeError(
+            f"OpenRTC metadata field {field_name!r} must be a string, got "
+            f"{type(value).__name__}."
+        )
+    normalized_value = value.strip()
+    if not normalized_value:
+        raise RuntimeError(f"OpenRTC metadata field {field_name!r} cannot be empty.")
+    return normalized_value

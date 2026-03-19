@@ -1,7 +1,18 @@
 from __future__ import annotations
 
-from openrtc_python._version import __version__
+from importlib.metadata import PackageNotFoundError, version
 
-from .pool import AgentConfig, AgentPool
+from .pool import AgentConfig, AgentDiscoveryConfig, AgentPool, agent_config
 
-__all__ = ["AgentConfig", "AgentPool", "__version__"]
+try:
+    __version__ = version("openrtc")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
+
+__all__ = [
+    "AgentConfig",
+    "AgentDiscoveryConfig",
+    "AgentPool",
+    "__version__",
+    "agent_config",
+]

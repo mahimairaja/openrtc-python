@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from livekit.agents import Agent, RunContext, function_tool
 
-AGENT_NAME = "dental"
-AGENT_GREETING = "Welcome to OpenRTC dental scheduling."
+from openrtc import agent_config
 
 
+@agent_config(name="dental", greeting="Welcome to OpenRTC dental scheduling.")
 class DentalAgent(Agent):
     """Example dental reception assistant."""
 
