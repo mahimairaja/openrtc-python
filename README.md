@@ -7,7 +7,7 @@
 <br />
 
 
-<h1 align="center" style="display: none;">OpenRTC</h1>
+<!-- <h1 align="center" style="display: none;">OpenRTC</h1> -->
 
 <div align="center">
   <strong>A Python framework for running multiple LiveKit voice agents in a single worker process with shared prewarmed models.</strong>
