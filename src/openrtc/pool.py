@@ -143,6 +143,7 @@ class AgentPool:
         tts: Any = None,
         greeting: str | None = None,
         session_kwargs: Mapping[str, Any] | None = None,
+        **session_options: Any,
     ) -> AgentConfig:
         """Register an agent in the pool.
 
@@ -157,6 +158,10 @@ class AgentPool:
                 Common examples include ``preemptive_generation``,
                 ``allow_interruptions``, ``min_endpointing_delay``,
                 ``max_endpointing_delay``, and ``max_tool_steps``.
+            **session_options: Additional ``AgentSession`` options passed
+                directly to ``add()``. When the same option appears in both
+                ``session_kwargs`` and direct keyword arguments, the direct
+                keyword argument takes precedence.
 
         Returns:
             The created agent configuration.
@@ -180,7 +185,10 @@ class AgentPool:
             llm=self._resolve_provider(llm, self._default_llm),
             tts=self._resolve_provider(tts, self._default_tts),
             greeting=self._resolve_greeting(greeting),
-            session_kwargs=self._copy_session_kwargs(session_kwargs),
+            session_kwargs=self._merge_session_kwargs(
+                session_kwargs=session_kwargs,
+                direct_session_kwargs=session_options,
+            ),
         )
         self._agents[normalized_name] = config
         logger.debug("Registered agent '%s'.", normalized_name)
@@ -394,12 +402,17 @@ class AgentPool:
     def _resolve_greeting(self, greeting: str | None) -> str | None:
         return self._default_greeting if greeting is None else greeting
 
-    def _copy_session_kwargs(
-        self, session_kwargs: Mapping[str, Any] | None
+    def _merge_session_kwargs(
+        self,
+        session_kwargs: Mapping[str, Any] | None,
+        direct_session_kwargs: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if session_kwargs is None:
-            return {}
-        return dict(session_kwargs)
+        merged_kwargs: dict[str, Any] = {}
+        if session_kwargs is not None:
+            merged_kwargs.update(session_kwargs)
+        if direct_session_kwargs is not None:
+            merged_kwargs.update(direct_session_kwargs)
+        return merged_kwargs
 
     def _resolve_discovery_metadata(
         self,

@@ -194,6 +194,27 @@ def test_handle_session_passes_session_kwargs_and_provider_objects(
     assert session.kwargs["turn_detection"] is ctx.proc.userdata["turn_detection"]
 
 
+def test_handle_session_supports_direct_session_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("openrtc.pool.AgentSession", FakeSession)
+    pool = AgentPool()
+    pool.add(
+        "dental",
+        DentalAgent,
+        session_kwargs={"allow_interruptions": False},
+        allow_interruptions=True,
+        max_tool_steps=6,
+    )
+    ctx = FakeJobContext(job_metadata={"agent": "dental"})
+
+    asyncio.run(pool._handle_session(ctx))
+
+    session = FakeSession.instances[0]
+    assert session.kwargs["allow_interruptions"] is True
+    assert session.kwargs["max_tool_steps"] == 6
+
+
 def test_handle_session_generates_greeting_after_connect(
     monkeypatch: pytest.MonkeyPatch,
     pool: AgentPool,
