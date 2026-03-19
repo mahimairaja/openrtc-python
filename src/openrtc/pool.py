@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, cli
@@ -96,6 +99,54 @@ class AgentPool:
         self._agents[normalized_name] = config
         logger.debug("Registered agent '%s'.", normalized_name)
         return config
+
+    def discover(self, agents_dir: str | Path) -> list[AgentConfig]:
+        """Discover agent modules from a directory and register them.
+
+        Args:
+            agents_dir: Directory containing Python files that define agent modules.
+
+        Returns:
+            The list of agent configurations registered from the directory.
+
+        Raises:
+            FileNotFoundError: If ``agents_dir`` does not exist.
+            NotADirectoryError: If ``agents_dir`` is not a directory.
+            RuntimeError: If a module cannot be loaded or contains no local ``Agent``
+                subclass.
+        """
+        directory = Path(agents_dir).expanduser().resolve()
+        if not directory.exists():
+            raise FileNotFoundError(f"Agents directory does not exist: {directory}")
+        if not directory.is_dir():
+            raise NotADirectoryError(f"Agents path is not a directory: {directory}")
+
+        discovered_configs: list[AgentConfig] = []
+        for module_path in sorted(directory.glob("*.py")):
+            if module_path.name == "__init__.py" or module_path.stem.startswith("_"):
+                logger.debug("Skipping agent module '%s'.", module_path.name)
+                continue
+
+            module = self._load_agent_module(module_path)
+            agent_cls = self._find_local_agent_subclass(module)
+            agent_name = self._read_module_str(module, "AGENT_NAME") or module_path.stem
+            config = self.add(
+                agent_name,
+                agent_cls,
+                stt=getattr(module, "AGENT_STT", None),
+                llm=getattr(module, "AGENT_LLM", None),
+                tts=getattr(module, "AGENT_TTS", None),
+                greeting=self._read_module_str(module, "AGENT_GREETING"),
+            )
+            logger.info(
+                "Discovered agent '%s' from %s using class %s.",
+                config.name,
+                module_path,
+                agent_cls.__name__,
+            )
+            discovered_configs.append(config)
+
+        return discovered_configs
 
     def list_agents(self) -> list[str]:
         """Return registered agent names in registration order."""
@@ -194,6 +245,51 @@ class AgentPool:
             raise ValueError(f"Unknown agent '{name}' requested via {source}.") from exc
         logger.debug("Resolved agent '%s' via %s.", name, source)
         return config
+
+    def _load_agent_module(self, module_path: Path) -> ModuleType:
+        module_name = f"openrtc_discovered_{module_path.stem}"
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Could not create import spec for {module_path}.")
+
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to import agent module '{module_path.name}': {exc}"
+            ) from exc
+        return module
+
+    def _find_local_agent_subclass(self, module: ModuleType) -> type[Agent]:
+        for value in vars(module).values():
+            if (
+                isinstance(value, type)
+                and issubclass(value, Agent)
+                and value is not Agent
+                and value.__module__ == module.__name__
+            ):
+                return value
+
+        raise RuntimeError(
+            f"Module '{module.__name__}' does not define a local Agent subclass."
+        )
+
+    def _read_module_str(self, module: ModuleType, attribute_name: str) -> str | None:
+        value = getattr(module, attribute_name, None)
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise RuntimeError(
+                f"Module '{module.__name__}' has non-string {attribute_name!r}: "
+                f"{type(value).__name__}."
+            )
+        normalized_value = value.strip()
+        if not normalized_value:
+            raise RuntimeError(
+                f"Module '{module.__name__}' defines empty {attribute_name!r}."
+            )
+        return normalized_value
 
     def _load_shared_runtime_dependencies(self) -> tuple[Any, type[Any]]:
         """Load the optional LiveKit runtime dependencies used during prewarm.

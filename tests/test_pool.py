@@ -6,7 +6,7 @@ from livekit.agents import Agent
 from openrtc import AgentPool
 
 
-class TestAgent(Agent):
+class DemoAgent(Agent):
     def __init__(self) -> None:
         super().__init__(instructions="Test agent")
 
@@ -16,7 +16,7 @@ def test_add_registers_agent() -> None:
 
     config = pool.add(
         "test",
-        TestAgent,
+        DemoAgent,
         stt="deepgram/nova-3",
         llm="openai/gpt-4.1-mini",
         tts="cartesia/sonic-3",
@@ -28,10 +28,10 @@ def test_add_registers_agent() -> None:
 
 def test_add_duplicate_name_raises() -> None:
     pool = AgentPool()
-    pool.add("test", TestAgent)
+    pool.add("test", DemoAgent)
 
     with pytest.raises(ValueError):
-        pool.add("test", TestAgent)
+        pool.add("test", DemoAgent)
 
 
 @pytest.mark.parametrize("agent_cls", [str, object])
@@ -44,8 +44,8 @@ def test_add_non_agent_raises(agent_cls: type[object]) -> None:
 
 def test_list_agents_returns_registration_order() -> None:
     pool = AgentPool()
-    pool.add("restaurant", TestAgent)
-    pool.add("dental", TestAgent)
+    pool.add("restaurant", DemoAgent)
+    pool.add("dental", DemoAgent)
 
     assert pool.list_agents() == ["restaurant", "dental"]
 

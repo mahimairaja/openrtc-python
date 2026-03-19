@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from livekit.agents import Agent, RunContext, function_tool
 
+AGENT_NAME = "restaurant"
+AGENT_STT = "deepgram/nova-3:multi"
+AGENT_LLM = "openai/gpt-4.1-mini"
+AGENT_TTS = "cartesia/sonic-3"
+AGENT_GREETING = "Welcome to OpenRTC restaurant reservations."
+
 
 class RestaurantAgent(Agent):
     """Example restaurant reservation assistant."""
