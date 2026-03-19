@@ -53,5 +53,18 @@ For backward compatibility, discovery still supports legacy module-level
 4. the first registered agent
 
 Registered greetings are generated after `ctx.connect()`, and advanced
-`AgentSession` options can be passed per agent with `session_kwargs`.
+`AgentSession` options can be passed either with `session_kwargs` or directly as
+keyword arguments to `add()`. Direct keyword arguments take precedence when the
+same option is provided both ways.
+
+```python
+pool.add(
+    "restaurant",
+    RestaurantAgent,
+    greeting="Welcome to reservations.",
+    session_kwargs={"allow_interruptions": False},
+    max_tool_steps=4,
+    preemptive_generation=True,
+)
+```
 

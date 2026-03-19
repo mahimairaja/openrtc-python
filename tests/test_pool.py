@@ -58,6 +58,29 @@ def test_add_stores_session_kwargs_copy() -> None:
     }
 
 
+def test_add_merges_direct_session_kwargs_with_mapping() -> None:
+    pool = AgentPool()
+    session_kwargs = {
+        "preemptive_generation": False,
+        "allow_interruptions": False,
+    }
+
+    config = pool.add(
+        "test",
+        DemoAgent,
+        session_kwargs=session_kwargs,
+        preemptive_generation=True,
+        max_tool_steps=3,
+    )
+    session_kwargs["allow_interruptions"] = True
+
+    assert config.session_kwargs == {
+        "preemptive_generation": True,
+        "allow_interruptions": False,
+        "max_tool_steps": 3,
+    }
+
+
 def test_add_duplicate_name_raises() -> None:
     pool = AgentPool()
     pool.add("test", DemoAgent)
