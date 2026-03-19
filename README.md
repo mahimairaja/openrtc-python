@@ -1,11 +1,54 @@
-# OpenRTC
+<div align="center">
+  <a href="https://github.com/mahimailabs/openrtc">
+    <img src="assets/banner.png" alt="OpenRTC Banner" width="100%" />
+  </a>
+</div>
 
-OpenRTC is a Python framework for running multiple LiveKit voice agents in a
-single worker process with shared prewarmed models.
+<br />
 
-It is designed for the common case where you want to run several different
+
+<h1 align="center" style="display: none;">OpenRTC</h1>
+
+<div align="center">
+  <strong>A Python framework for running multiple LiveKit voice agents in a single worker process with shared prewarmed models.</strong>
+</div>
+<br />
+
+<div align="center">
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python Version"></a>
+  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff"></a>
+  <a href="https://pypi.org/project/openrtc/"><img src="https://img.shields.io/pypi/v/openrtc.svg" alt="PyPI version"></a>
+</div>
+
+<br />
+
+OpenRTC is designed for the common case where you want to run several different
 voice agents on a small VPS without paying the memory cost of one full
 LiveKit worker per agent.
+
+<br />
+
+<details>
+  <summary><b>Table of Contents</b></summary>
+  <ol>
+    <li><a href="#why-openrtc-exists">Why OpenRTC exists</a></li>
+    <li><a href="#what-openrtc-wraps">What OpenRTC wraps</a></li>
+    <li><a href="#memory-comparison">Memory comparison</a></li>
+    <li><a href="#installation">Installation</a></li>
+    <li><a href="#quick-start-register-agents-directly-with-add">Quick start: register agents directly</a></li>
+    <li><a href="#quick-start-discover-agent-files-with-agent_config">Quick start: discover agent files</a></li>
+    <li><a href="#routing-behavior">Routing behavior</a></li>
+    <li><a href="#greetings-and-session-options">Greetings and session options</a></li>
+    <li><a href="#provider-model-strings">Provider model strings</a></li>
+    <li><a href="#cli-usage">CLI usage</a></li>
+    <li><a href="#project-structure">Project structure</a></li>
+    <li><a href="#migration-from-legacy-agent_-module-globals">Migration from legacy</a></li>
+    <li><a href="#contributing">Contributing</a></li>
+  </ol>
+</details>
+
+<br />
 
 ## Why OpenRTC exists
 
