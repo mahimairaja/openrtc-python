@@ -4,6 +4,7 @@ import importlib.util
 import json
 import logging
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -28,6 +29,7 @@ class AgentConfig:
         llm: Large language model provider string or provider instance.
         tts: Text-to-speech provider string or provider instance.
         greeting: Optional initial greeting reserved for future use.
+        session_kwargs: Additional ``AgentSession`` keyword arguments.
     """
 
     name: str
@@ -36,6 +38,7 @@ class AgentConfig:
     llm: Any = None
     tts: Any = None
     greeting: str | None = None
+    session_kwargs: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -139,6 +142,8 @@ class AgentPool:
         llm: Any = None,
         tts: Any = None,
         greeting: str | None = None,
+        session_kwargs: Mapping[str, Any] | None = None,
+        **agent_session_kwargs: Any,
     ) -> AgentConfig:
         """Register an agent in the pool.
 
@@ -149,12 +154,20 @@ class AgentPool:
             llm: LLM provider string or instance.
             tts: TTS provider string or instance.
             greeting: Optional greeting reserved for later milestones.
+            session_kwargs: Backward-compatible mapping of extra ``AgentSession``
+                keyword arguments.
+            **agent_session_kwargs: Additional ``AgentSession`` keyword arguments
+                passed directly to :class:`livekit.agents.AgentSession`. When the
+                same key appears in both places, direct keyword arguments override
+                ``session_kwargs``. Named parameters such as ``stt``, ``llm``, and
+                ``tts`` take precedence over both forms.
 
         Returns:
             The created agent configuration.
 
         Raises:
-            TypeError: If ``agent_cls`` is not a LiveKit ``Agent`` subclass.
+            TypeError: If ``agent_cls`` is not a LiveKit ``Agent`` subclass or if
+                ``session_kwargs`` is not a mapping.
             ValueError: If ``name`` is empty or already registered.
         """
         normalized_name = name.strip()
@@ -165,6 +178,14 @@ class AgentPool:
         if not isinstance(agent_cls, type) or not issubclass(agent_cls, Agent):
             raise TypeError("agent_cls must be a subclass of livekit.agents.Agent.")
 
+        if session_kwargs is not None and not isinstance(session_kwargs, Mapping):
+            raise TypeError("session_kwargs must be a mapping when provided.")
+
+        merged_session_kwargs = self._merge_session_kwargs(
+            session_kwargs,
+            agent_session_kwargs,
+        )
+
         config = AgentConfig(
             name=normalized_name,
             agent_cls=agent_cls,
@@ -172,6 +193,7 @@ class AgentPool:
             llm=self._resolve_provider(llm, self._default_llm),
             tts=self._resolve_provider(tts, self._default_tts),
             greeting=self._resolve_greeting(greeting),
+            session_kwargs=merged_session_kwargs,
         )
         self._agents[normalized_name] = config
         logger.debug("Registered agent '%s'.", normalized_name)
@@ -283,13 +305,7 @@ class AgentPool:
     async def _handle_session(self, ctx: JobContext) -> None:
         """Create and start a LiveKit ``AgentSession`` for the resolved agent."""
         config = self._resolve_agent(ctx)
-        session = AgentSession(
-            stt=config.stt,
-            llm=config.llm,
-            tts=config.tts,
-            vad=ctx.proc.userdata["vad"],
-            turn_detection=ctx.proc.userdata["turn_detection"],
-        )
+        session = AgentSession(**self._build_agent_session_kwargs(config, ctx))
 
         await session.start(agent=config.agent_cls(), room=ctx.room)
         await ctx.connect()
@@ -326,6 +342,30 @@ class AgentPool:
 
     def _resolve_provider(self, value: Any, default_value: Any) -> Any:
         return default_value if value is None else value
+
+    def _merge_session_kwargs(
+        self,
+        session_kwargs: Mapping[str, Any] | None,
+        agent_session_kwargs: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        merged_kwargs: dict[str, Any] = {}
+        if session_kwargs is not None:
+            merged_kwargs.update(deepcopy(dict(session_kwargs)))
+        merged_kwargs.update(agent_session_kwargs)
+        return merged_kwargs
+
+    def _build_agent_session_kwargs(
+        self,
+        config: AgentConfig,
+        ctx: JobContext,
+    ) -> dict[str, Any]:
+        session_kwargs = deepcopy(config.session_kwargs or {})
+        session_kwargs.setdefault("stt", config.stt)
+        session_kwargs.setdefault("llm", config.llm)
+        session_kwargs.setdefault("tts", config.tts)
+        session_kwargs.setdefault("vad", ctx.proc.userdata["vad"])
+        session_kwargs.setdefault("turn_detection", ctx.proc.userdata["turn_detection"])
+        return session_kwargs
 
     def _resolve_greeting(self, greeting: str | None) -> str | None:
         return self._default_greeting if greeting is None else greeting

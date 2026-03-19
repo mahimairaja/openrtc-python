@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
-from livekit.agents import Agent
+from livekit.agents import Agent, AgentSession, JobContext
 
 from openrtc import AgentPool
 
@@ -71,3 +73,82 @@ def test_run_without_agents_raises() -> None:
 
     with pytest.raises(RuntimeError):
         pool.run()
+
+
+def test_add_merges_session_kwargs_with_direct_agent_session_kwargs() -> None:
+    pool = AgentPool()
+
+    config = pool.add(
+        "test",
+        DemoAgent,
+        session_kwargs={"max_tool_steps": 2, "allow_interruptions": False},
+        allow_interruptions=True,
+        max_nested_fnc_calls=3,
+    )
+
+    assert config.session_kwargs == {
+        "max_tool_steps": 2,
+        "allow_interruptions": True,
+        "max_nested_fnc_calls": 3,
+    }
+
+
+def test_add_named_session_parameters_override_session_kwargs() -> None:
+    pool = AgentPool(default_stt="default-stt", default_llm="default-llm")
+
+    config = pool.add(
+        "test",
+        DemoAgent,
+        stt="named-stt",
+        llm="named-llm",
+        session_kwargs={
+            "stt": "mapping-stt",
+            "llm": "mapping-llm",
+            "tts": "mapping-tts",
+        },
+        tts="named-tts",
+    )
+
+    assert config.stt == "named-stt"
+    assert config.llm == "named-llm"
+    assert config.tts == "named-tts"
+    assert config.session_kwargs == {
+        "stt": "mapping-stt",
+        "llm": "mapping-llm",
+        "tts": "mapping-tts",
+    }
+
+
+def test_handle_session_uses_direct_agent_session_kwargs() -> None:
+    pool = AgentPool(default_stt="default-stt", default_llm="default-llm")
+    pool.add(
+        "test",
+        DemoAgent,
+        stt="named-stt",
+        session_kwargs={"allow_interruptions": False, "vad": "custom-vad"},
+        allow_interruptions=True,
+    )
+
+    ctx = JobContext()
+    ctx.proc.userdata["vad"] = "pool-vad"
+    ctx.proc.userdata["turn_detection"] = "pool-turn"
+
+    asyncio.run(pool._handle_session(ctx))
+
+    assert AgentSession.last_instance is not None
+    # The conftest stub stores the latest instance on the class for inspection.
+    assert AgentSession.last_instance.kwargs == {
+        "allow_interruptions": True,
+        "vad": "custom-vad",
+        "stt": "named-stt",
+        "llm": "default-llm",
+        "tts": None,
+        "turn_detection": "pool-turn",
+    }
+
+
+def test_add_rejects_non_mapping_session_kwargs() -> None:
+    pool = AgentPool()
+
+    with pytest.raises(TypeError):
+        pool.add("test", DemoAgent, session_kwargs=[("stt", "deepgram")])  # type: ignore[arg-type]

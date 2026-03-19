@@ -42,3 +42,32 @@ openrtc list \
 
 For backward compatibility, discovery still supports legacy module-level
 `AGENT_*` variables, but the decorator is the preferred pattern.
+
+
+## Registering agents with explicit `AgentSession` options
+
+`AgentPool.add()` continues to support the mapping-based `session_kwargs=` API,
+and it now also accepts direct `AgentSession` keyword arguments for the Milestone
+3 calling style. Direct keyword arguments override entries from
+`session_kwargs=`, while the named `stt=`, `llm=`, and `tts=` parameters remain
+the highest-precedence public API for those providers.
+
+```python
+from openrtc import AgentPool
+from livekit.agents import Agent
+
+
+class SupportAgent(Agent):
+    ...
+
+
+pool = AgentPool(default_stt="deepgram/nova-3:multi")
+pool.add(
+    "support",
+    SupportAgent,
+    llm="openai/gpt-4.1-mini",
+    session_kwargs={"allow_interruptions": False},
+    allow_interruptions=True,
+)
+```
+

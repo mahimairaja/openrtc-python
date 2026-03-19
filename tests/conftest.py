@@ -35,11 +35,16 @@ except ImportError:
             return decorator
 
     class AgentSession:
+        last_instance = None
+
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self.args = args
             self.kwargs = kwargs
+            self.started_with: dict[str, Any] | None = None
+            AgentSession.last_instance = self
 
         async def start(self, *args: Any, **kwargs: Any) -> None:
+            self.started_with = {"args": args, "kwargs": kwargs}
             return None
 
     class JobContext:
