@@ -1,0 +1,226 @@
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
+from typing import Any
+
+import pytest
+from livekit.agents import Agent
+
+from openrtc import AgentPool
+
+
+class RestaurantAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="Restaurant")
+
+
+class DentalAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="Dental")
+
+
+@dataclass
+class FakeProcess:
+    userdata: dict[str, Any] = field(
+        default_factory=lambda: {"vad": object(), "turn_detection": object()}
+    )
+
+
+@dataclass
+class FakeJob:
+    metadata: Any = None
+
+
+@dataclass
+class FakeRoom:
+    metadata: Any = None
+    name: str = "general-room"
+
+
+EVENT_LOG: list[str] = []
+
+
+class FakeJobContext:
+    def __init__(
+        self,
+        *,
+        job_metadata: Any = None,
+        room_metadata: Any = None,
+        room_name: str = "general-room",
+    ) -> None:
+        self.job = FakeJob(metadata=job_metadata)
+        self.room = FakeRoom(metadata=room_metadata, name=room_name)
+        self.proc = FakeProcess()
+        self.events: list[str] = []
+
+    async def connect(self) -> None:
+        self.events.append("connect")
+        EVENT_LOG.append("connect")
+
+
+class FakeSession:
+    instances: list[FakeSession] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.events: list[str] = []
+        self.generated_instructions: list[str] = []
+        self.started_agent: Agent | None = None
+        self.started_room: FakeRoom | None = None
+        FakeSession.instances.append(self)
+
+    async def start(self, *, agent: Agent, room: FakeRoom) -> None:
+        self.started_agent = agent
+        self.started_room = room
+        self.events.append("start")
+        EVENT_LOG.append("start")
+
+    async def generate_reply(self, *, instructions: str) -> None:
+        self.generated_instructions.append(instructions)
+        self.events.append("generate_reply")
+        EVENT_LOG.append("generate_reply")
+
+
+@pytest.fixture(autouse=True)
+def reset_fake_session() -> None:
+    FakeSession.instances.clear()
+    EVENT_LOG.clear()
+
+
+@pytest.fixture
+def pool() -> AgentPool:
+    pool = AgentPool()
+    pool.add("restaurant", RestaurantAgent, greeting="Welcome to reservations.")
+    pool.add(
+        "dental",
+        DentalAgent,
+        session_kwargs={"allow_interruptions": False, "max_tool_steps": 5},
+    )
+    return pool
+
+
+def test_resolve_agent_prefers_job_metadata_over_room_metadata(
+    pool: AgentPool,
+) -> None:
+    ctx = FakeJobContext(
+        job_metadata={"agent": "dental"},
+        room_metadata={"agent": "restaurant"},
+    )
+
+    resolved = pool._resolve_agent(ctx)
+
+    assert resolved.name == "dental"
+
+
+def test_resolve_agent_supports_demo_metadata_key(pool: AgentPool) -> None:
+    ctx = FakeJobContext(job_metadata={"demo": "restaurant"})
+
+    resolved = pool._resolve_agent(ctx)
+
+    assert resolved.name == "restaurant"
+
+
+def test_resolve_agent_prefers_agent_key_over_demo_key(pool: AgentPool) -> None:
+    ctx = FakeJobContext(job_metadata={"agent": "dental", "demo": "restaurant"})
+
+    resolved = pool._resolve_agent(ctx)
+
+    assert resolved.name == "dental"
+
+
+def test_resolve_agent_matches_room_name_prefix(pool: AgentPool) -> None:
+    ctx = FakeJobContext(room_name="dental-follow-up")
+
+    resolved = pool._resolve_agent(ctx)
+
+    assert resolved.name == "dental"
+
+
+def test_resolve_agent_falls_back_to_first_registered_agent(pool: AgentPool) -> None:
+    ctx = FakeJobContext(room_name="general-room")
+
+    resolved = pool._resolve_agent(ctx)
+
+    assert resolved.name == "restaurant"
+
+
+def test_resolve_agent_raises_for_unknown_metadata_agent(pool: AgentPool) -> None:
+    ctx = FakeJobContext(job_metadata={"agent": "missing"})
+
+    with pytest.raises(
+        ValueError,
+        match="Unknown agent 'missing' requested via job metadata",
+    ):
+        pool._resolve_agent(ctx)
+
+
+def test_remove_changes_default_fallback_order(pool: AgentPool) -> None:
+    pool.remove("restaurant")
+    ctx = FakeJobContext(room_name="general-room")
+
+    resolved = pool._resolve_agent(ctx)
+
+    assert resolved.name == "dental"
+
+
+def test_handle_session_passes_session_kwargs_and_provider_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("openrtc.pool.AgentSession", FakeSession)
+    stt_provider = object()
+    llm_provider = object()
+    tts_provider = object()
+    pool = AgentPool()
+    pool.add(
+        "dental",
+        DentalAgent,
+        stt=stt_provider,
+        llm=llm_provider,
+        tts=tts_provider,
+        session_kwargs={"preemptive_generation": True, "max_tool_steps": 4},
+    )
+    ctx = FakeJobContext(job_metadata={"agent": "dental"})
+
+    asyncio.run(pool._handle_session(ctx))
+
+    session = FakeSession.instances[0]
+    assert session.kwargs["stt"] is stt_provider
+    assert session.kwargs["llm"] is llm_provider
+    assert session.kwargs["tts"] is tts_provider
+    assert session.kwargs["preemptive_generation"] is True
+    assert session.kwargs["max_tool_steps"] == 4
+    assert session.kwargs["vad"] is ctx.proc.userdata["vad"]
+    assert session.kwargs["turn_detection"] is ctx.proc.userdata["turn_detection"]
+
+
+def test_handle_session_generates_greeting_after_connect(
+    monkeypatch: pytest.MonkeyPatch,
+    pool: AgentPool,
+) -> None:
+    monkeypatch.setattr("openrtc.pool.AgentSession", FakeSession)
+    ctx = FakeJobContext(job_metadata={"agent": "restaurant"})
+
+    asyncio.run(pool._handle_session(ctx))
+
+    session = FakeSession.instances[0]
+    assert session.events == ["start", "generate_reply"]
+    assert ctx.events == ["connect"]
+    assert session.generated_instructions == ["Welcome to reservations."]
+    assert EVENT_LOG == ["start", "connect", "generate_reply"]
+
+
+def test_handle_session_skips_greeting_when_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    pool: AgentPool,
+) -> None:
+    monkeypatch.setattr("openrtc.pool.AgentSession", FakeSession)
+    ctx = FakeJobContext(job_metadata={"agent": "dental"})
+
+    asyncio.run(pool._handle_session(ctx))
+
+    session = FakeSession.instances[0]
+    assert session.events == ["start"]
+    assert ctx.events == ["connect"]
+    assert session.generated_instructions == []
+    assert EVENT_LOG == ["start", "connect"]
