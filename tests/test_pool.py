@@ -18,7 +18,7 @@ def test_add_registers_agent() -> None:
         "test",
         DemoAgent,
         stt="deepgram/nova-3",
-        llm="openai/gpt-4.1-mini",
+        llm="openai/gpt-5-mini",
         tts="cartesia/sonic-3",
     )
 
