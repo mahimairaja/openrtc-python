@@ -42,6 +42,22 @@ def test_add_uses_pool_defaults_when_agent_values_are_omitted() -> None:
     assert config.greeting == "Hello from OpenRTC."
 
 
+def test_add_stores_session_kwargs_copy() -> None:
+    pool = AgentPool()
+    session_kwargs = {
+        "preemptive_generation": True,
+        "min_endpointing_delay": 0.5,
+    }
+
+    config = pool.add("test", DemoAgent, session_kwargs=session_kwargs)
+    session_kwargs["preemptive_generation"] = False
+
+    assert config.session_kwargs == {
+        "preemptive_generation": True,
+        "min_endpointing_delay": 0.5,
+    }
+
+
 def test_add_duplicate_name_raises() -> None:
     pool = AgentPool()
     pool.add("test", DemoAgent)
@@ -64,6 +80,37 @@ def test_list_agents_returns_registration_order() -> None:
     pool.add("dental", DemoAgent)
 
     assert pool.list_agents() == ["restaurant", "dental"]
+
+
+def test_get_returns_registered_agent() -> None:
+    pool = AgentPool()
+    config = pool.add("restaurant", DemoAgent)
+
+    assert pool.get("restaurant") is config
+
+
+def test_get_unknown_agent_raises_key_error() -> None:
+    pool = AgentPool()
+
+    with pytest.raises(KeyError, match="Unknown agent 'missing'"):
+        pool.get("missing")
+
+
+def test_remove_returns_removed_agent() -> None:
+    pool = AgentPool()
+    config = pool.add("restaurant", DemoAgent)
+
+    removed = pool.remove("restaurant")
+
+    assert removed is config
+    assert pool.list_agents() == []
+
+
+def test_remove_unknown_agent_raises_key_error() -> None:
+    pool = AgentPool()
+
+    with pytest.raises(KeyError, match="Unknown agent 'missing'"):
+        pool.remove("missing")
 
 
 def test_run_without_agents_raises() -> None:
