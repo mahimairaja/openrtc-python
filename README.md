@@ -42,3 +42,16 @@ openrtc list \
 
 For backward compatibility, discovery still supports legacy module-level
 `AGENT_*` variables, but the decorator is the preferred pattern.
+
+## Session routing and greetings
+
+`AgentPool` resolves sessions in this order:
+
+1. `ctx.job.metadata["agent"]` or `ctx.job.metadata["demo"]`
+2. `ctx.room.metadata["agent"]` or `ctx.room.metadata["demo"]`
+3. room name prefix matching such as `restaurant-call-123`
+4. the first registered agent
+
+Registered greetings are generated after `ctx.connect()`, and advanced
+`AgentSession` options can be passed per agent with `session_kwargs`.
+

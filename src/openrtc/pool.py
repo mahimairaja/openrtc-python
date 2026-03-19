@@ -4,7 +4,7 @@ import importlib.util
 import json
 import logging
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 from typing import Any, TypeVar
@@ -15,6 +15,7 @@ logger = logging.getLogger("openrtc")
 
 _AgentType = TypeVar("_AgentType", bound=type[Agent])
 _AGENT_METADATA_ATTR = "__openrtc_agent_config__"
+_METADATA_AGENT_KEYS = ("agent", "demo")
 
 
 @dataclass(slots=True)
@@ -27,7 +28,8 @@ class AgentConfig:
         stt: Speech-to-text provider string or provider instance.
         llm: Large language model provider string or provider instance.
         tts: Text-to-speech provider string or provider instance.
-        greeting: Optional initial greeting reserved for future use.
+        greeting: Optional initial greeting played after the session connects.
+        session_kwargs: Additional keyword arguments forwarded to ``AgentSession``.
     """
 
     name: str
@@ -36,6 +38,7 @@ class AgentConfig:
     llm: Any = None
     tts: Any = None
     greeting: str | None = None
+    session_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -139,6 +142,7 @@ class AgentPool:
         llm: Any = None,
         tts: Any = None,
         greeting: str | None = None,
+        session_kwargs: Mapping[str, Any] | None = None,
     ) -> AgentConfig:
         """Register an agent in the pool.
 
@@ -148,7 +152,11 @@ class AgentPool:
             stt: STT provider string or instance.
             llm: LLM provider string or instance.
             tts: TTS provider string or instance.
-            greeting: Optional greeting reserved for later milestones.
+            greeting: Optional greeting played after the room connection completes.
+            session_kwargs: Extra keyword arguments forwarded to ``AgentSession``.
+                Common examples include ``preemptive_generation``,
+                ``allow_interruptions``, ``min_endpointing_delay``,
+                ``max_endpointing_delay``, and ``max_tool_steps``.
 
         Returns:
             The created agent configuration.
@@ -172,6 +180,7 @@ class AgentPool:
             llm=self._resolve_provider(llm, self._default_llm),
             tts=self._resolve_provider(tts, self._default_tts),
             greeting=self._resolve_greeting(greeting),
+            session_kwargs=self._copy_session_kwargs(session_kwargs),
         )
         self._agents[normalized_name] = config
         logger.debug("Registered agent '%s'.", normalized_name)
@@ -230,6 +239,42 @@ class AgentPool:
         """Return registered agent names in registration order."""
         return list(self._agents)
 
+    def get(self, name: str) -> AgentConfig:
+        """Return a registered agent configuration by name.
+
+        Args:
+            name: The registered agent name.
+
+        Returns:
+            The registered configuration.
+
+        Raises:
+            KeyError: If the agent name is unknown.
+        """
+        try:
+            return self._agents[name]
+        except KeyError as exc:
+            raise KeyError(f"Unknown agent '{name}'.") from exc
+
+    def remove(self, name: str) -> AgentConfig:
+        """Remove and return a registered agent configuration.
+
+        Args:
+            name: The registered agent name.
+
+        Returns:
+            The removed configuration.
+
+        Raises:
+            KeyError: If the agent name is unknown.
+        """
+        try:
+            removed = self._agents.pop(name)
+        except KeyError as exc:
+            raise KeyError(f"Unknown agent '{name}'.") from exc
+        logger.debug("Removed agent '%s'.", name)
+        return removed
+
     def run(self) -> None:
         """Run the LiveKit worker for the registered agents.
 
@@ -274,10 +319,19 @@ class AgentPool:
         if selected_name is not None:
             return self._get_registered_agent(selected_name, source="room metadata")
 
+        room_name = getattr(ctx.room, "name", None)
+        if isinstance(room_name, str):
+            for agent_name, config in self._agents.items():
+                if room_name.startswith(f"{agent_name}-"):
+                    logger.info(
+                        "Resolved agent '%s' via room name prefix from room '%s'.",
+                        agent_name,
+                        room_name,
+                    )
+                    return config
+
         default_agent = next(iter(self._agents.values()))
-        logger.debug(
-            "No routing metadata found; defaulting to agent '%s'.", default_agent.name
-        )
+        logger.info("Resolved agent '%s' via default fallback.", default_agent.name)
         return default_agent
 
     async def _handle_session(self, ctx: JobContext) -> None:
@@ -289,17 +343,21 @@ class AgentPool:
             tts=config.tts,
             vad=ctx.proc.userdata["vad"],
             turn_detection=ctx.proc.userdata["turn_detection"],
+            **config.session_kwargs,
         )
 
         await session.start(agent=config.agent_cls(), room=ctx.room)
         await ctx.connect()
 
+        if config.greeting is not None:
+            logger.debug("Generating greeting for agent '%s'.", config.name)
+            await session.generate_reply(instructions=config.greeting)
+
     def _agent_name_from_metadata(self, metadata: Any) -> str | None:
         if metadata is None:
             return None
         if isinstance(metadata, Mapping):
-            value = metadata.get("agent")
-            return value.strip() if isinstance(value, str) and value.strip() else None
+            return self._agent_name_from_mapping(metadata)
         if isinstance(metadata, str):
             stripped = metadata.strip()
             if not stripped:
@@ -310,10 +368,16 @@ class AgentPool:
                 logger.debug("Ignoring non-JSON metadata: %s", stripped)
                 return None
             if isinstance(decoded, Mapping):
-                value = decoded.get("agent")
-                return (
-                    value.strip() if isinstance(value, str) and value.strip() else None
-                )
+                return self._agent_name_from_mapping(decoded)
+        return None
+
+    def _agent_name_from_mapping(self, metadata: Mapping[str, Any]) -> str | None:
+        for key in _METADATA_AGENT_KEYS:
+            value = metadata.get(key)
+            if isinstance(value, str):
+                normalized_value = value.strip()
+                if normalized_value:
+                    return normalized_value
         return None
 
     def _get_registered_agent(self, name: str, *, source: str) -> AgentConfig:
@@ -321,7 +385,7 @@ class AgentPool:
             config = self._agents[name]
         except KeyError as exc:
             raise ValueError(f"Unknown agent '{name}' requested via {source}.") from exc
-        logger.debug("Resolved agent '%s' via %s.", name, source)
+        logger.info("Resolved agent '%s' via %s.", name, source)
         return config
 
     def _resolve_provider(self, value: Any, default_value: Any) -> Any:
@@ -329,6 +393,13 @@ class AgentPool:
 
     def _resolve_greeting(self, greeting: str | None) -> str | None:
         return self._default_greeting if greeting is None else greeting
+
+    def _copy_session_kwargs(
+        self, session_kwargs: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        if session_kwargs is None:
+            return {}
+        return dict(session_kwargs)
 
     def _resolve_discovery_metadata(
         self,
