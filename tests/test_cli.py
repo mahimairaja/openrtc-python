@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from typer.testing import CliRunner
 
-from openrtc.cli import main
+from openrtc.cli import app, main
 
 
 @dataclass
@@ -55,10 +56,7 @@ def original_argv() -> list[str]:
     return sys.argv.copy()
 
 
-def test_list_with_resources_shows_footprint_and_summary(
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
+def test_list_with_resources_shows_footprint_and_summary(tmp_path: Path) -> None:
     agent_path = tmp_path / "one.py"
     agent_path.write_text(
         "from __future__ import annotations\n"
@@ -69,19 +67,19 @@ def test_list_with_resources_shows_footprint_and_summary(
         encoding="utf-8",
     )
 
-    exit_code = main(["list", "--agents-dir", str(tmp_path), "--resources"])
+    runner = CliRunner()
+    result = runner.invoke(app, ["list", "--agents-dir", str(tmp_path), "--resources"])
 
-    assert exit_code == 0
-    out = capsys.readouterr().out
-    assert "one:" in out
-    assert "source_file=" in out
+    assert result.exit_code == 0
+    out = result.stdout
+    assert "one" in out
+    assert "One" in out
     assert "Resource summary" in out
     assert "OpenRTC runs every agent" in out
 
 
 def test_list_command_prints_discovered_agents(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     stub_pool = StubPool(
         discovered=[
@@ -97,11 +95,14 @@ def test_list_command_prints_discovered_agents(
     )
     monkeypatch.setattr("openrtc.cli.AgentPool", lambda **kwargs: stub_pool)
 
-    exit_code = main(["list", "--agents-dir", "./agents"])
+    runner = CliRunner()
+    result = runner.invoke(app, ["list", "--agents-dir", "./agents"])
 
-    assert exit_code == 0
-    assert stub_pool.discover_calls == [Path("./agents")]
-    assert "restaurant: class=StubAgent" in capsys.readouterr().out
+    assert result.exit_code == 0
+    assert stub_pool.discover_calls == [Path("./agents").resolve()]
+    out = result.stdout
+    assert "restaurant" in out
+    assert "StubAgent" in out
 
 
 def test_cli_passes_pool_defaults_into_agent_pool(
