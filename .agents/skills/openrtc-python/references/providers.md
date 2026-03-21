@@ -1,9 +1,13 @@
-# Provider string reference
+# Provider reference
 
-OpenRTC passes provider strings through to `livekit-agents`. Use the format
-`provider/model` or `provider/model:variant`.
+Read this when configuring non-default providers, using provider objects instead
+of strings, or looking up which environment variable a provider needs.
 
-## STT (Speech-to-Text)
+## String format
+
+`provider/model` or `provider/model:variant`. Passed through to `livekit-agents`.
+
+### STT
 
 | String | Provider |
 |---|---|
@@ -12,7 +16,7 @@ OpenRTC passes provider strings through to `livekit-agents`. Use the format
 | `assemblyai/...` | AssemblyAI |
 | `google/...` | Google Cloud STT |
 
-## LLM (Large Language Model)
+### LLM
 
 | String | Provider |
 |---|---|
@@ -21,7 +25,7 @@ OpenRTC passes provider strings through to `livekit-agents`. Use the format
 | `groq/llama-4-scout` | Groq Llama 4 Scout |
 | `anthropic/claude-sonnet-4-20250514` | Anthropic Claude Sonnet 4 |
 
-## TTS (Text-to-Speech)
+### TTS
 
 | String | Provider |
 |---|---|
@@ -29,29 +33,29 @@ OpenRTC passes provider strings through to `livekit-agents`. Use the format
 | `elevenlabs/...` | ElevenLabs |
 | `openai/tts-1` | OpenAI TTS-1 |
 
-## Using provider objects
+## Provider objects
 
-For advanced configuration (custom parameters, non-default endpoints), pass
-provider instances instead of strings:
+Use when you need custom parameters or non-default endpoints:
 
 ```python
 from livekit.plugins import openai
 
-stt = openai.STT(model="gpt-4o-mini-transcribe")
-llm = openai.responses.LLM(model="gpt-4.1-mini")
-tts = openai.TTS(model="gpt-4o-mini-tts")
+pool = AgentPool(
+    default_stt=openai.STT(model="gpt-4o-mini-transcribe"),
+    default_llm=openai.responses.LLM(model="gpt-4.1-mini"),
+    default_tts=openai.TTS(model="gpt-4o-mini-tts"),
+)
 ```
 
-Provider objects must be pickleable. OpenRTC has built-in serialization support
-for `livekit.plugins.openai` STT, TTS, and LLM types. Other provider objects
-must be natively pickleable or you should use string identifiers instead.
+OpenRTC has built-in pickle support for `livekit.plugins.openai` STT, TTS, and
+LLM types. Other provider objects must be natively pickleable or use string
+identifiers instead.
 
 ## Environment variables
 
-Each provider requires its own API key:
-
-| Provider | Environment variable |
+| Provider | Variable |
 |---|---|
+| LiveKit | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
 | Deepgram | `DEEPGRAM_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | Cartesia | `CARTESIA_API_KEY` |
@@ -59,5 +63,3 @@ Each provider requires its own API key:
 | ElevenLabs | `ELEVENLABS_API_KEY` |
 | Anthropic | `ANTHROPIC_API_KEY` |
 | AssemblyAI | `ASSEMBLYAI_API_KEY` |
-
-Only set the keys for providers your agents actually use.
