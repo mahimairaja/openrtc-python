@@ -598,7 +598,9 @@ def _build_session_kwargs(
                 _deprecated_turn_options_to_turn_handling(deprecated_turn_options),
             )
 
-    if explicit_turn_handling is not None and not isinstance(explicit_turn_handling, Mapping):
+    if explicit_turn_handling is not None and not isinstance(
+        explicit_turn_handling, Mapping
+    ):
         session_kwargs["turn_handling"] = explicit_turn_handling
     else:
         session_kwargs["turn_handling"] = turn_handling
@@ -641,7 +643,9 @@ def _extract_deprecated_turn_options(session_kwargs: dict[str, Any]) -> dict[str
     return deprecated_options
 
 
-def _deprecated_turn_options_to_turn_handling(options: Mapping[str, Any]) -> dict[str, Any]:
+def _deprecated_turn_options_to_turn_handling(
+    options: Mapping[str, Any],
+) -> dict[str, Any]:
     turn_handling: dict[str, Any] = {}
     endpointing: dict[str, Any] = {}
     interruption: dict[str, Any] = {}
@@ -672,9 +676,7 @@ def _deprecated_turn_options_to_turn_handling(options: Mapping[str, Any]) -> dic
             "agent_false_interruption_timeout"
         ]
     if "resume_false_interruption" in options:
-        interruption["resume_false_interruption"] = options[
-            "resume_false_interruption"
-        ]
+        interruption["resume_false_interruption"] = options["resume_false_interruption"]
     if interruption:
         turn_handling["interruption"] = interruption
 
@@ -690,10 +692,7 @@ def _merge_turn_handling(
 ) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
-        if (
-            isinstance(value, Mapping)
-            and isinstance(merged.get(key), Mapping)
-        ):
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
             merged[key] = {**merged[key], **value}
         else:
             merged[key] = value
