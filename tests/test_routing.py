@@ -28,6 +28,7 @@ class FakeProcess:
             "turn_detection_factory": lambda: object(),
         }
     )
+    inference_executor: object | None = None
 
 
 @dataclass
@@ -195,7 +196,7 @@ def test_handle_session_passes_session_kwargs_and_provider_objects(
     assert session.kwargs["max_tool_steps"] == 4
     assert session.kwargs["vad"] is ctx.proc.userdata["vad"]
     assert session.kwargs["turn_handling"]["interruption"]["mode"] == "vad"
-    assert session.kwargs["turn_handling"]["turn_detection"] is not None
+    assert session.kwargs["turn_handling"]["turn_detection"] == "vad"
 
 
 def test_handle_session_passes_provider_strings_through_unchanged(
@@ -265,6 +266,22 @@ def test_handle_session_preserves_explicit_turn_handling(
     assert session.kwargs["turn_handling"]["turn_detection"] is custom_turn_detection
     assert session.kwargs["turn_handling"]["interruption"]["mode"] == "adaptive"
     assert session.kwargs["turn_handling"]["interruption"]["enabled"] is False
+
+
+def test_handle_session_uses_multilingual_turn_detection_when_inference_executor_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("openrtc.pool.AgentSession", FakeSession)
+    pool = AgentPool()
+    pool.add("dental", DentalAgent)
+    ctx = FakeJobContext(job_metadata={"agent": "dental"})
+    ctx.proc.inference_executor = object()
+
+    asyncio.run(pool._handle_session(ctx))
+
+    session = FakeSession.instances[0]
+    assert session.kwargs["turn_handling"]["turn_detection"] is not None
+    assert session.kwargs["turn_handling"]["turn_detection"] != "vad"
 
 
 def test_handle_session_generates_greeting_after_connect(

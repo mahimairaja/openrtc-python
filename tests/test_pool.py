@@ -345,7 +345,7 @@ def test_worker_callbacks_are_pickleable_and_keep_registered_agents(
     assert registered_session_callback is not None
     session_callback = pickle.loads(pickle.dumps(registered_session_callback))
 
-    process = SimpleNamespace(userdata={})
+    process = SimpleNamespace(userdata={}, inference_executor=None)
 
     class FakeVAD:
         @staticmethod
@@ -411,8 +411,5 @@ def test_worker_callbacks_are_pickleable_and_keep_registered_agents(
     )
     assert FakeSession.instances[0].kwargs["tts"].__class__.__module__ == "livekit.plugins.openai.tts"
     assert FakeSession.instances[0].kwargs["turn_handling"]["interruption"]["mode"] == "vad"
-    assert (
-        FakeSession.instances[0].kwargs["turn_handling"]["turn_detection"].__class__
-        is FakeTurnDetector
-    )
-    assert turn_factory_calls == 1
+    assert FakeSession.instances[0].kwargs["turn_handling"]["turn_detection"] == "vad"
+    assert turn_factory_calls == 0

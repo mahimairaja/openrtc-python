@@ -5,6 +5,7 @@ import importlib.util
 import inspect
 import json
 import logging
+import os
 import pickle
 import sys
 from collections.abc import Callable, Mapping
@@ -606,10 +607,30 @@ def _build_session_kwargs(
 
 
 def _default_turn_handling(proc: JobProcess) -> dict[str, Any]:
-    return {
-        "turn_detection": proc.userdata["turn_detection_factory"](),
-        "interruption": {"mode": "vad"},
-    }
+    turn_detection = _default_turn_detection(proc)
+    turn_handling: dict[str, Any] = {"interruption": {"mode": "vad"}}
+    if turn_detection is not None:
+        turn_handling["turn_detection"] = turn_detection
+    return turn_handling
+
+
+def _default_turn_detection(proc: JobProcess) -> Any:
+    if _supports_multilingual_turn_detection(proc):
+        return proc.userdata["turn_detection_factory"]()
+
+    logger.info(
+        "Falling back to VAD turn detection because no inference executor or "
+        "LIVEKIT_REMOTE_EOT_URL is available."
+    )
+    return "vad"
+
+
+def _supports_multilingual_turn_detection(proc: JobProcess) -> bool:
+    if os.getenv("LIVEKIT_REMOTE_EOT_URL"):
+        return True
+
+    inference_executor = getattr(proc, "inference_executor", None)
+    return inference_executor is not None
 
 
 def _extract_deprecated_turn_options(session_kwargs: dict[str, Any]) -> dict[str, Any]:
