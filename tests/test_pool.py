@@ -404,12 +404,21 @@ def test_worker_callbacks_are_pickleable_and_keep_registered_agents(
 
     assert ctx.connected is True
     assert FakeSession.instances[0].started is True
-    assert FakeSession.instances[0].kwargs["stt"].__class__.__module__ == "livekit.plugins.openai.stt"
+    assert (
+        FakeSession.instances[0].kwargs["stt"].__class__.__module__
+        == "livekit.plugins.openai.stt"
+    )
     assert (
         FakeSession.instances[0].kwargs["llm"].__class__.__module__
         == "livekit.plugins.openai.responses.llm"
     )
-    assert FakeSession.instances[0].kwargs["tts"].__class__.__module__ == "livekit.plugins.openai.tts"
-    assert FakeSession.instances[0].kwargs["turn_handling"]["interruption"]["mode"] == "vad"
+    assert (
+        FakeSession.instances[0].kwargs["tts"].__class__.__module__
+        == "livekit.plugins.openai.tts"
+    )
+    assert (
+        FakeSession.instances[0].kwargs["turn_handling"]["interruption"]["mode"]
+        == "vad"
+    )
     assert FakeSession.instances[0].kwargs["turn_handling"]["turn_detection"] == "vad"
     assert turn_factory_calls == 0
