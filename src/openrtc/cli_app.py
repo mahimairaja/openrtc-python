@@ -126,7 +126,8 @@ def list_command(
             help=(
                 "Include footprint fields (with --json and --plain) or extra "
                 "columns/summary (default Rich table). "
-                "On-disk sizes and RSS are best-effort estimates for this process."
+                "Memory line is OS-specific (Linux: current VmRSS; macOS: peak "
+                "ru_maxrss, not live RSS—see JSON description)."
             ),
         ),
     ] = False,

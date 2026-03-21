@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from livekit.agents import Agent
@@ -48,6 +49,21 @@ def test_process_resident_set_bytes_matches_info() -> None:
     )
     assert len(info.description) > 5
     assert process_resident_set_bytes() == info.bytes_value
+
+
+def test_resident_set_descriptions_align_with_platform() -> None:
+    """Guardrail: Linux vs macOS wording must stay distinct (see resources docs)."""
+    info = get_process_resident_set_info()
+    desc = info.description.lower()
+    if sys.platform.startswith("linux"):
+        assert info.metric == "linux_vm_rss"
+        assert "vmrss" in desc or "/proc" in desc
+    elif sys.platform == "darwin":
+        assert info.metric == "darwin_ru_max_rss"
+        assert "ru_maxrss" in desc or "getrusage" in desc
+        assert "peak" in desc or "max" in desc or "not instantaneous" in desc
+    else:
+        assert info.metric == "unavailable"
 
 
 def test_agent_disk_footprints_includes_registered_paths(tmp_path: Path) -> None:

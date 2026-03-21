@@ -295,6 +295,9 @@ Stable output for scripts and CI:
   legacy `print` format). Use `--resources` for source-size and RSS lines.
 - `--json` — machine-readable JSON with a `schema_version` field; combine with
   `--resources` for `resource_summary` (footprint + resident-set metadata).
+  The `resident_set` object includes a `description`: on **Linux** it reflects
+  current **VmRSS**; on **macOS** it is **peak** `ru_maxrss` (bytes), not
+  instantaneous live RSS—compare runs only on the same OS.
 
 ### Run in production mode
 
