@@ -41,11 +41,13 @@ class AgentDiscoveryConfig:
 ## `agent_config(...)`
 
 ```python
+from livekit.plugins import openai
+
 @agent_config(
     name="restaurant",
-    stt="deepgram/nova-3:multi",
-    llm="openai/gpt-4.1-mini",
-    tts="cartesia/sonic-3",
+    stt=openai.STT(model="gpt-4o-mini-transcribe"),
+    llm=openai.responses.LLM(model="gpt-4.1-mini"),
+    tts=openai.TTS(model="gpt-4o-mini-tts"),
     greeting="Welcome to reservations.",
 )
 class RestaurantAgent(Agent):
@@ -60,10 +62,12 @@ Use `agent_config(...)` to attach discovery metadata to a standard LiveKit
 Create a pool that manages multiple LiveKit agents in one worker process.
 
 ```python
+from livekit.plugins import openai
+
 pool = AgentPool(
-    default_stt="deepgram/nova-3:multi",
-    default_llm="openai/gpt-4.1-mini",
-    default_tts="cartesia/sonic-3",
+    default_stt=openai.STT(model="gpt-4o-mini-transcribe"),
+    default_llm=openai.responses.LLM(model="gpt-4.1-mini"),
+    default_tts=openai.TTS(model="gpt-4o-mini-tts"),
     default_greeting="Hello from OpenRTC.",
 )
 ```
@@ -102,12 +106,15 @@ Registers a named LiveKit `Agent` subclass.
 - `name` must be a non-empty string after trimming whitespace
 - names must be unique
 - `agent_cls` must be a subclass of `livekit.agents.Agent`
+- `agent_cls` must be defined at module scope for spawn-based worker runtimes
 
 ### Session options
 
 - `session_kwargs` forwards a mapping of keyword arguments to `AgentSession`
 - direct `**session_options` are also forwarded to `AgentSession`
 - when the same key appears in both places, the direct keyword argument wins
+- by default, OpenRTC supplies `turn_handling` with multilingual turn detection
+  and VAD-based interruption unless you override it explicitly
 
 ### Returns
 
@@ -134,6 +141,7 @@ Discovery behavior:
 - uses `@agent_config(...)` metadata when present
 - otherwise uses the filename stem as the agent name
 - falls back to pool defaults for omitted provider and greeting fields
+- preserves file-backed agent loading so discovered agents work with `livekit dev`
 
 ### Raises
 
@@ -204,12 +212,13 @@ If metadata references an unknown agent, OpenRTC raises `ValueError`.
 ```python
 from pathlib import Path
 
+from livekit.plugins import openai
 from openrtc import AgentPool
 
 pool = AgentPool(
-    default_stt="deepgram/nova-3:multi",
-    default_llm="openai/gpt-4.1-mini",
-    default_tts="cartesia/sonic-3",
+    default_stt=openai.STT(model="gpt-4o-mini-transcribe"),
+    default_llm=openai.responses.LLM(model="gpt-4.1-mini"),
+    default_tts=openai.TTS(model="gpt-4o-mini-tts"),
 )
 pool.discover(Path("./agents"))
 pool.run()

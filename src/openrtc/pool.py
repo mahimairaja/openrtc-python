@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import importlib
 import importlib.util
+import inspect
 import json
 import logging
+import os
+import pickle
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from functools import partial
+from hashlib import sha1
 from pathlib import Path
 from types import ModuleType
 from typing import Any, TypeVar
@@ -17,6 +23,18 @@ logger = logging.getLogger("openrtc")
 _AgentType = TypeVar("_AgentType", bound=type[Agent])
 _AGENT_METADATA_ATTR = "__openrtc_agent_config__"
 _METADATA_AGENT_KEYS = ("agent", "demo")
+_DEPRECATED_TURN_HANDLING_KEYS = (
+    "min_endpointing_delay",
+    "max_endpointing_delay",
+    "false_interruption_timeout",
+    "turn_detection",
+    "discard_audio_if_uninterruptible",
+    "min_interruption_duration",
+    "min_interruption_words",
+    "allow_interruptions",
+    "resume_false_interruption",
+    "agent_false_interruption_timeout",
+)
 
 
 @dataclass(slots=True)
@@ -24,6 +42,24 @@ class _PoolRuntimeState:
     """Serializable runtime state shared with worker callbacks."""
 
     agents: dict[str, AgentConfig]
+
+
+@dataclass(frozen=True, slots=True)
+class _AgentClassRef:
+    """Serializable reference to an agent class."""
+
+    module_name: str
+    qualname: str
+    module_path: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderRef:
+    """Serializable reference to a supported provider object."""
+
+    module_name: str
+    qualname: str
+    kwargs: dict[str, Any]
 
 
 def _prewarm_worker(
@@ -35,7 +71,7 @@ def _prewarm_worker(
         raise RuntimeError("Register at least one agent before calling run().")
     silero_module, turn_detector_model = _load_shared_runtime_dependencies()
     proc.userdata["vad"] = silero_module.VAD.load()
-    proc.userdata["turn_detection"] = turn_detector_model()
+    proc.userdata["turn_detection_factory"] = turn_detector_model
 
 
 async def _run_universal_session(
@@ -46,13 +82,13 @@ async def _run_universal_session(
     if not runtime_state.agents:
         raise RuntimeError("No agents are registered in the pool.")
     config = _resolve_agent_config(runtime_state.agents, ctx)
+    session_kwargs = _build_session_kwargs(config.session_kwargs, ctx.proc)
     session = AgentSession(
         stt=config.stt,
         llm=config.llm,
         tts=config.tts,
         vad=ctx.proc.userdata["vad"],
-        turn_detection=ctx.proc.userdata["turn_detection"],
-        **config.session_kwargs,
+        **session_kwargs,
     )
 
     await session.start(agent=config.agent_cls(), room=ctx.room)
@@ -84,6 +120,34 @@ class AgentConfig:
     tts: Any = None
     greeting: str | None = None
     session_kwargs: dict[str, Any] = field(default_factory=dict)
+    _agent_ref: _AgentClassRef = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self._agent_ref = _build_agent_class_ref(self.agent_cls)
+        _serialize_provider_value(self.stt)
+        _serialize_provider_value(self.llm)
+        _serialize_provider_value(self.tts)
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "stt": _serialize_provider_value(self.stt),
+            "llm": _serialize_provider_value(self.llm),
+            "tts": _serialize_provider_value(self.tts),
+            "greeting": self.greeting,
+            "session_kwargs": dict(self.session_kwargs),
+            "agent_ref": self._agent_ref,
+        }
+
+    def __setstate__(self, state: Mapping[str, Any]) -> None:
+        self.name = state["name"]
+        self.stt = _deserialize_provider_value(state["stt"])
+        self.llm = _deserialize_provider_value(state["llm"])
+        self.tts = _deserialize_provider_value(state["tts"])
+        self.greeting = state["greeting"]
+        self.session_kwargs = dict(state["session_kwargs"])
+        self._agent_ref = state["agent_ref"]
+        self.agent_cls = _resolve_agent_class(self._agent_ref)
 
 
 @dataclass(slots=True)
@@ -399,19 +463,13 @@ class AgentPool:
         return AgentDiscoveryConfig()
 
     def _load_agent_module(self, module_path: Path) -> ModuleType:
-        module_name = f"openrtc_discovered_{module_path.stem}"
-        spec = importlib.util.spec_from_file_location(module_name, module_path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"Could not create import spec for {module_path}.")
-
-        module = importlib.util.module_from_spec(spec)
+        module_name = _discovered_module_name(module_path)
         try:
-            spec.loader.exec_module(module)
+            return _load_module_from_path(module_name, module_path)
         except Exception as exc:
             raise RuntimeError(
                 f"Failed to import agent module '{module_path.name}': {exc}"
             ) from exc
-        return module
 
     def _find_local_agent_subclass(self, module: ModuleType) -> type[Agent]:
         for value in vars(module).values():
@@ -440,6 +498,205 @@ def _normalize_optional_name(value: Any, *, field_name: str) -> str | None:
     if not normalized_value:
         raise RuntimeError(f"OpenRTC metadata field {field_name!r} cannot be empty.")
     return normalized_value
+
+
+def _serialize_provider_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    provider_ref = _try_build_provider_ref(value)
+    if provider_ref is not None:
+        return provider_ref
+
+    try:
+        pickle.dumps(value)
+    except Exception as exc:
+        raise ValueError(
+            f"Provider object of type {value.__class__.__module__}."
+            f"{value.__class__.__qualname__} is not spawn-safe. "
+            "Pass a pickleable value or use a provider type supported by OpenRTC."
+        ) from exc
+
+    return value
+
+
+def _deserialize_provider_value(value: Any) -> Any:
+    if not isinstance(value, _ProviderRef):
+        return value
+
+    module = importlib.import_module(value.module_name)
+    provider_cls = _resolve_qualname(module, value.qualname)
+    return provider_cls(**dict(value.kwargs))
+
+
+def _try_build_provider_ref(value: Any) -> _ProviderRef | None:
+    module_name = value.__class__.__module__
+    qualname = value.__class__.__qualname__
+
+    if module_name == "livekit.plugins.openai.stt" and qualname == "STT":
+        return _ProviderRef(
+            module_name=module_name,
+            qualname=qualname,
+            kwargs=_extract_provider_kwargs(value),
+        )
+
+    if module_name == "livekit.plugins.openai.tts" and qualname == "TTS":
+        return _ProviderRef(
+            module_name=module_name,
+            qualname=qualname,
+            kwargs=_extract_provider_kwargs(value),
+        )
+
+    if module_name == "livekit.plugins.openai.responses.llm" and qualname == "LLM":
+        return _ProviderRef(
+            module_name=module_name,
+            qualname=qualname,
+            kwargs=_extract_provider_kwargs(value),
+        )
+
+    return None
+
+
+def _extract_provider_kwargs(value: Any) -> dict[str, Any]:
+    options = getattr(value, "_opts", None)
+    if options is None:
+        return {}
+    return _filter_provider_kwargs(vars(options))
+
+
+def _filter_provider_kwargs(options: Mapping[str, Any]) -> dict[str, Any]:
+    filtered: dict[str, Any] = {}
+    for key, option_value in options.items():
+        if _is_not_given(option_value):
+            continue
+        filtered[key] = option_value
+    return filtered
+
+
+def _is_not_given(value: Any) -> bool:
+    return repr(value) == "NOT_GIVEN"
+
+
+def _build_session_kwargs(
+    configured_kwargs: Mapping[str, Any],
+    proc: JobProcess,
+) -> dict[str, Any]:
+    session_kwargs = dict(configured_kwargs)
+    explicit_turn_handling = session_kwargs.pop("turn_handling", None)
+    deprecated_turn_options = _extract_deprecated_turn_options(session_kwargs)
+
+    if isinstance(explicit_turn_handling, Mapping):
+        turn_handling = _merge_turn_handling(
+            _default_turn_handling(proc),
+            explicit_turn_handling,
+        )
+    else:
+        turn_handling = _default_turn_handling(proc)
+        if deprecated_turn_options:
+            turn_handling = _merge_turn_handling(
+                turn_handling,
+                _deprecated_turn_options_to_turn_handling(deprecated_turn_options),
+            )
+
+    if explicit_turn_handling is not None and not isinstance(
+        explicit_turn_handling, Mapping
+    ):
+        session_kwargs["turn_handling"] = explicit_turn_handling
+    else:
+        session_kwargs["turn_handling"] = turn_handling
+
+    return session_kwargs
+
+
+def _default_turn_handling(proc: JobProcess) -> dict[str, Any]:
+    turn_detection = _default_turn_detection(proc)
+    turn_handling: dict[str, Any] = {"interruption": {"mode": "vad"}}
+    if turn_detection is not None:
+        turn_handling["turn_detection"] = turn_detection
+    return turn_handling
+
+
+def _default_turn_detection(proc: JobProcess) -> Any:
+    if _supports_multilingual_turn_detection(proc):
+        return proc.userdata["turn_detection_factory"]()
+
+    logger.info(
+        "Falling back to VAD turn detection because no inference executor or "
+        "LIVEKIT_REMOTE_EOT_URL is available."
+    )
+    return "vad"
+
+
+def _supports_multilingual_turn_detection(proc: JobProcess) -> bool:
+    if os.getenv("LIVEKIT_REMOTE_EOT_URL"):
+        return True
+
+    inference_executor = getattr(proc, "inference_executor", None)
+    return inference_executor is not None
+
+
+def _extract_deprecated_turn_options(session_kwargs: dict[str, Any]) -> dict[str, Any]:
+    deprecated_options: dict[str, Any] = {}
+    for key in _DEPRECATED_TURN_HANDLING_KEYS:
+        if key in session_kwargs:
+            deprecated_options[key] = session_kwargs.pop(key)
+    return deprecated_options
+
+
+def _deprecated_turn_options_to_turn_handling(
+    options: Mapping[str, Any],
+) -> dict[str, Any]:
+    turn_handling: dict[str, Any] = {}
+    endpointing: dict[str, Any] = {}
+    interruption: dict[str, Any] = {}
+
+    if "min_endpointing_delay" in options:
+        endpointing["min_delay"] = options["min_endpointing_delay"]
+    if "max_endpointing_delay" in options:
+        endpointing["max_delay"] = options["max_endpointing_delay"]
+    if endpointing:
+        turn_handling["endpointing"] = endpointing
+
+    if options.get("allow_interruptions") is False:
+        interruption["enabled"] = False
+    if "discard_audio_if_uninterruptible" in options:
+        interruption["discard_audio_if_uninterruptible"] = options[
+            "discard_audio_if_uninterruptible"
+        ]
+    if "min_interruption_duration" in options:
+        interruption["min_duration"] = options["min_interruption_duration"]
+    if "min_interruption_words" in options:
+        interruption["min_words"] = options["min_interruption_words"]
+    if "false_interruption_timeout" in options:
+        interruption["false_interruption_timeout"] = options[
+            "false_interruption_timeout"
+        ]
+    if "agent_false_interruption_timeout" in options:
+        interruption["false_interruption_timeout"] = options[
+            "agent_false_interruption_timeout"
+        ]
+    if "resume_false_interruption" in options:
+        interruption["resume_false_interruption"] = options["resume_false_interruption"]
+    if interruption:
+        turn_handling["interruption"] = interruption
+
+    if "turn_detection" in options:
+        turn_handling["turn_detection"] = options["turn_detection"]
+
+    return turn_handling
+
+
+def _merge_turn_handling(
+    base: Mapping[str, Any],
+    override: Mapping[str, Any],
+) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
 
 
 def _resolve_agent_config(
@@ -515,6 +772,101 @@ def _get_registered_agent(
         raise ValueError(f"Unknown agent '{name}' requested via {source}.") from exc
     logger.info("Resolved agent '%s' via %s.", name, source)
     return config
+
+
+def _build_agent_class_ref(agent_cls: type[Agent]) -> _AgentClassRef:
+    module_name = agent_cls.__module__
+    qualname = agent_cls.__qualname__
+    if "<locals>" in qualname:
+        raise ValueError(
+            "agent_cls must be defined at module scope so spawned workers can "
+            "reload it safely."
+        )
+
+    module_path = _try_get_module_path(agent_cls)
+    if module_name == "__main__" and module_path is None:
+        raise ValueError(
+            "agent_cls defined in __main__ must come from a real Python file so "
+            "spawned workers can reload it."
+        )
+
+    return _AgentClassRef(
+        module_name=module_name,
+        qualname=qualname,
+        module_path=None if module_path is None else str(module_path),
+    )
+
+
+def _resolve_agent_class(agent_ref: _AgentClassRef) -> type[Agent]:
+    module: ModuleType | None = None
+    module_path = (
+        None if agent_ref.module_path is None else Path(agent_ref.module_path).resolve()
+    )
+
+    if module_path is not None and agent_ref.module_name.startswith(
+        "openrtc_discovered_"
+    ):
+        module = _load_module_from_path(agent_ref.module_name, module_path)
+    else:
+        try:
+            module = importlib.import_module(agent_ref.module_name)
+        except ModuleNotFoundError:
+            if module_path is None:
+                raise
+            module = _load_module_from_path(agent_ref.module_name, module_path)
+
+    agent_cls = _resolve_qualname(module, agent_ref.qualname)
+    if not isinstance(agent_cls, type) or not issubclass(agent_cls, Agent):
+        raise TypeError(
+            f"{agent_ref.qualname!r} in module {module.__name__!r} is not a "
+            "livekit.agents.Agent subclass."
+        )
+    return agent_cls
+
+
+def _resolve_qualname(module: ModuleType, qualname: str) -> Any:
+    value: Any = module
+    for part in qualname.split("."):
+        value = getattr(value, part)
+    return value
+
+
+def _try_get_module_path(agent_cls: type[Agent]) -> Path | None:
+    try:
+        source_path = inspect.getsourcefile(agent_cls)
+    except (OSError, TypeError):
+        source_path = None
+    if source_path is None:
+        return None
+    return Path(source_path).resolve()
+
+
+def _discovered_module_name(module_path: Path) -> str:
+    resolved_path = module_path.resolve()
+    digest = sha1(str(resolved_path).encode("utf-8")).hexdigest()[:12]
+    return f"openrtc_discovered_{resolved_path.stem}_{digest}"
+
+
+def _load_module_from_path(module_name: str, module_path: Path) -> ModuleType:
+    resolved_path = module_path.resolve()
+    existing_module = sys.modules.get(module_name)
+    if existing_module is not None:
+        existing_file = getattr(existing_module, "__file__", None)
+        if existing_file is not None and Path(existing_file).resolve() == resolved_path:
+            return existing_module
+
+    spec = importlib.util.spec_from_file_location(module_name, resolved_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not create import spec for {resolved_path}.")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
 
 
 def _load_shared_runtime_dependencies() -> tuple[Any, type[Any]]:

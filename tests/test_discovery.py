@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pickle
+import sys
 from pathlib import Path
 
 import pytest
@@ -48,7 +50,7 @@ def test_discover_prefers_decorator_metadata_and_uses_pool_defaults(
         decorator=(
             "@agent_config(\n"
             '    name="restaurant",\n'
-            '    stt="deepgram/nova-3:multi",\n'
+            '    stt="openai/gpt-4o-mini-transcribe",\n'
             '    llm="openai/gpt-4.1-mini",\n'
             '    greeting="Welcome to reservations.",\n'
             ")\n"
@@ -77,7 +79,7 @@ def test_discover_prefers_decorator_metadata_and_uses_pool_defaults(
     assert dental.greeting == "fallback greeting"
 
     restaurant = next(config for config in discovered if config.name == "restaurant")
-    assert restaurant.stt == "deepgram/nova-3:multi"
+    assert restaurant.stt == "openai/gpt-4o-mini-transcribe"
     assert restaurant.llm == "openai/gpt-4.1-mini"
     assert restaurant.tts == "fallback-tts"
     assert restaurant.greeting == "Welcome to reservations."
@@ -94,17 +96,17 @@ def test_discover_uses_filename_and_pool_defaults_without_decorator(
     )
 
     pool = AgentPool(
-        default_stt="deepgram/nova-3:multi",
+        default_stt="openai/gpt-4o-mini-transcribe",
         default_llm="openai/gpt-4.1-mini",
-        default_tts="cartesia/sonic-3",
+        default_tts="openai/gpt-4o-mini-tts",
         default_greeting="Hello from pool defaults.",
     )
     discovered = pool.discover(tmp_path)
 
     assert [config.name for config in discovered] == ["fallback_agent"]
-    assert discovered[0].stt == "deepgram/nova-3:multi"
+    assert discovered[0].stt == "openai/gpt-4o-mini-transcribe"
     assert discovered[0].llm == "openai/gpt-4.1-mini"
-    assert discovered[0].tts == "cartesia/sonic-3"
+    assert discovered[0].tts == "openai/gpt-4o-mini-tts"
     assert discovered[0].greeting == "Hello from pool defaults."
 
 
@@ -159,3 +161,27 @@ def test_discover_ignores_imported_agent_subclasses(tmp_path: Path) -> None:
 
     assert [config.name for config in discovered] == ["local"]
     assert discovered[0].agent_cls.__name__ == "LocalAgent"
+
+
+def test_discovered_agent_config_is_pickleable_across_module_reload(
+    tmp_path: Path,
+) -> None:
+    _write_agent_module(
+        tmp_path,
+        "dental.py",
+        class_name="DentalAgent",
+        decorator='@agent_config(name="dental")\n',
+    )
+
+    pool = AgentPool()
+    discovered = pool.discover(tmp_path)
+
+    config = discovered[0]
+    module_name = config.agent_cls.__module__
+    sys.modules.pop(module_name, None)
+
+    restored = pickle.loads(pickle.dumps(config))
+
+    assert restored.name == "dental"
+    assert restored.agent_cls.__name__ == "DentalAgent"
+    assert restored.agent_cls.__module__ == module_name
