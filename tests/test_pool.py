@@ -102,6 +102,17 @@ def test_add_non_agent_raises(agent_cls: type[object]) -> None:
         pool.add("test", agent_cls)  # type: ignore[arg-type]
 
 
+def test_add_rejects_local_agent_classes() -> None:
+    class LocalAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="Local agent")
+
+    pool = AgentPool()
+
+    with pytest.raises(ValueError, match="module scope"):
+        pool.add("local", LocalAgent)
+
+
 def test_list_agents_returns_registration_order() -> None:
     pool = AgentPool()
     pool.add("restaurant", DemoAgent)
