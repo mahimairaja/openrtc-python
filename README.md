@@ -98,8 +98,14 @@ Install OpenRTC from PyPI:
 pip install openrtc
 ```
 
-`openrtc` depends on `livekit-agents[openai,silero,turn-detector]`, so the runtime
-plugins required by shared prewarm are installed with the base package.
+The base package pulls in `livekit-agents[openai,silero,turn-detector]`, so the
+runtime plugins required by shared prewarm are installed without extra flags.
+
+Install the Typer/Rich CLI (`openrtc list`, `openrtc start`, `openrtc dev`) with:
+
+```bash
+pip install 'openrtc[cli]'
+```
 
 If you are developing locally, the repository uses `uv` for environment and
 command management.

@@ -93,7 +93,7 @@ def test_list_command_prints_discovered_agents(
             )
         ]
     )
-    monkeypatch.setattr("openrtc.cli.AgentPool", lambda **kwargs: stub_pool)
+    monkeypatch.setattr("openrtc.cli_app.AgentPool", lambda **kwargs: stub_pool)
 
     runner = CliRunner()
     result = runner.invoke(app, ["list", "--agents-dir", "./agents"])
@@ -117,7 +117,7 @@ def test_cli_passes_pool_defaults_into_agent_pool(
         created_pools.append(pool)
         return pool
 
-    monkeypatch.setattr("openrtc.cli.AgentPool", build_pool)
+    monkeypatch.setattr("openrtc.cli_app.AgentPool", build_pool)
 
     exit_code = main(
         [
@@ -152,7 +152,7 @@ def test_run_commands_inject_livekit_mode_and_run_pool(
     stub_pool = StubPool(
         discovered=[StubConfig(name="restaurant", agent_cls=StubAgent)]
     )
-    monkeypatch.setattr("openrtc.cli.AgentPool", lambda **kwargs: stub_pool)
+    monkeypatch.setattr("openrtc.cli_app.AgentPool", lambda **kwargs: stub_pool)
     monkeypatch.setattr(sys, "argv", original_argv.copy())
 
     exit_code = main([command, "--agents-dir", "./agents"])
@@ -166,8 +166,14 @@ def test_cli_returns_non_zero_when_no_agents_are_discovered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stub_pool = StubPool(discovered=[])
-    monkeypatch.setattr("openrtc.cli.AgentPool", lambda **kwargs: stub_pool)
+    monkeypatch.setattr("openrtc.cli_app.AgentPool", lambda **kwargs: stub_pool)
 
     exit_code = main(["list", "--agents-dir", "./agents"])
 
     assert exit_code == 1
+
+
+def test_cli_entrypoint_documents_optional_extra() -> None:
+    from openrtc.cli import CLI_EXTRA_INSTALL_HINT
+
+    assert "openrtc[cli]" in CLI_EXTRA_INSTALL_HINT
