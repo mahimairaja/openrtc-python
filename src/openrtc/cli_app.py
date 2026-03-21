@@ -401,18 +401,31 @@ def _print_resource_summary_plain(discovered: list[AgentConfig]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Invoke the Typer application (same path as the ``openrtc`` console script)."""
+    """Run the CLI via Typer's underlying Click command (programmatic API).
+
+    Uses :func:`typer.main.get_command` and :meth:`click.core.Command.main` so
+    production code does not rely on :class:`typer.testing.CliRunner` (tests may
+    still use CliRunner). Pass ``args`` without the program name when invoking
+    programmatically; ``prog_name`` matches the ``openrtc`` console script.
+
+    ``start`` / ``dev`` mutate :data:`sys.argv` before ``pool.run()``; we restore
+    the previous argv list after the command finishes so programmatic callers
+    are not polluted.
+    """
+    from typer.main import get_command
+
+    cli = get_command(app)
     previous_argv = sys.argv
-    if argv is not None:
-        sys.argv = [previous_argv[0]] + list(argv)
     try:
-        app()
+        if argv is not None:
+            cli.main(args=list(argv), prog_name="openrtc", standalone_mode=True)
+        else:
+            cli.main(args=None, prog_name="openrtc", standalone_mode=True)
     except SystemExit as exc:
         code = exc.code
         if code is None:
             return 0
         return code if isinstance(code, int) else 1
     finally:
-        if argv is not None:
-            sys.argv = previous_argv
+        sys.argv = previous_argv
     return 0
