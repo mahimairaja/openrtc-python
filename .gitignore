@@ -220,3 +220,4 @@ src/openrtc_python/_version.py
 src/openrtc/_version.py
 
 .DS_Store
+.cursor
