@@ -6,7 +6,7 @@ with the optional extra ``openrtc[cli]``.
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import sys
 from typing import Any
 
@@ -15,39 +15,42 @@ CLI_EXTRA_INSTALL_HINT = (
     "Install with: pip install 'openrtc[cli]'"
 )
 
-_CLI_IMPORT_ERROR = (
-    "Failed to import openrtc.cli_app even though Typer and Rich appear to be "
-    "installed. This usually indicates a broken install or an internal error, "
-    "not a missing optional extra."
-)
 
+def _optional_typer_rich_missing() -> bool:
+    """Return True only when ``typer`` or ``rich`` cannot be imported.
 
-def _optional_cli_dependencies_installed() -> bool:
-    return (
-        importlib.util.find_spec("typer") is not None
-        and importlib.util.find_spec("rich") is not None
-    )
+    Any other :exc:`ModuleNotFoundError` (e.g. a sub-dependency of Typer, or a
+    missing core package) is re-raised so callers see the real failure rather
+    than the optional-extra install hint.
+    """
+    try:
+        importlib.import_module("typer")
+        importlib.import_module("rich")
+    except ModuleNotFoundError as exc:
+        if exc.name in ("typer", "rich"):
+            return True
+        raise
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:
     """Run the OpenRTC CLI when optional ``cli`` dependencies are installed."""
-    if not _optional_cli_dependencies_installed():
+    if _optional_typer_rich_missing():
         print(CLI_EXTRA_INSTALL_HINT, file=sys.stderr)
         return 1
-    try:
-        from openrtc.cli_app import main as run_cli
-    except ImportError as exc:
-        raise ImportError(_CLI_IMPORT_ERROR) from exc
+
+    # Do not catch ImportError here: failures (e.g. missing livekit, broken
+    # openrtc install) must surface with their original tracebacks.
+    from openrtc.cli_app import main as run_cli
+
     return run_cli(argv)
 
 
 def __getattr__(name: str) -> Any:
     if name == "app":
-        if not _optional_cli_dependencies_installed():
+        if _optional_typer_rich_missing():
             raise ImportError(CLI_EXTRA_INSTALL_HINT)
-        try:
-            from openrtc.cli_app import app as typer_app
-        except ImportError as exc:
-            raise ImportError(_CLI_IMPORT_ERROR) from exc
+        from openrtc.cli_app import app as typer_app
+
         return typer_app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

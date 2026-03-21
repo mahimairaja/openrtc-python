@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
 import sys
 from dataclasses import dataclass
@@ -186,20 +186,37 @@ def test_main_returns_one_when_typer_not_installed(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    real_find = importlib.util.find_spec
+    real_import_module = importlib.import_module
 
-    def find_spec_without_typer(name: str) -> Any:
+    def import_module_without_typer(name: str, package: str | None = None) -> Any:
         if name == "typer":
-            return None
-        return real_find(name)
+            raise ModuleNotFoundError("No module named 'typer'", name="typer")
+        return real_import_module(name, package)
 
-    monkeypatch.setattr(importlib.util, "find_spec", find_spec_without_typer)
+    monkeypatch.setattr(importlib, "import_module", import_module_without_typer)
 
     exit_code = main(["list", "--agents-dir", "./agents"])
 
     assert exit_code == 1
     err = capsys.readouterr().err
     assert "openrtc[cli]" in err
+
+
+def test_main_propagates_module_not_found_for_non_optional_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing modules other than typer/rich must not be masked as the [cli] hint."""
+    real_import_module = importlib.import_module
+
+    def import_module_missing_click(name: str, package: str | None = None) -> Any:
+        if name == "typer":
+            raise ModuleNotFoundError("No module named 'click'", name="click")
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", import_module_missing_click)
+
+    with pytest.raises(ModuleNotFoundError, match="click"):
+        main(["list", "--agents-dir", "./agents"])
 
 
 def test_list_json_output_is_valid_json(tmp_path: Path) -> None:
