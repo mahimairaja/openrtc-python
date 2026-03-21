@@ -20,8 +20,13 @@ type TokenSuccessBody = {
 };
 
 export async function action({ request }: Route.ActionArgs) {
-  const body = (await request.json()) as { variant?: string };
-  if (!body.variant || !isDemoVariant(body.variant)) {
+  const body = await parseRequestBody(request);
+  const requestedVariant =
+    requestUrlVariant(request) ??
+    body.variant ??
+    resolveVariantFromAgentName(body.room_config?.agents?.[0]?.agent_name);
+
+  if (!requestedVariant || !isDemoVariant(requestedVariant)) {
     return Response.json(
       { error: "Choose either dentist or restaurant." },
       { status: 400 },
@@ -42,9 +47,9 @@ export async function action({ request }: Route.ActionArgs) {
     );
   }
 
-  const selectedDemo = DEMO_DEFINITIONS[body.variant];
+  const selectedDemo = DEMO_DEFINITIONS[requestedVariant];
   const roomName = buildRoomName(selectedDemo.agent);
-  const participantIdentity = buildParticipantIdentity(body.variant);
+  const participantIdentity = buildParticipantIdentity(requestedVariant);
   const roomMetadata = JSON.stringify({ agent: selectedDemo.agent });
 
   const roomService = new RoomServiceClient(
@@ -88,6 +93,40 @@ export async function action({ request }: Route.ActionArgs) {
       { status: 500 },
     );
   }
+}
+
+type TokenRequestBody = {
+  variant?: string;
+  room_config?: {
+    agents?: Array<{
+      agent_name?: BackendAgent;
+    }>;
+  };
+};
+
+async function parseRequestBody(request: Request): Promise<TokenRequestBody> {
+  try {
+    return (await request.json()) as TokenRequestBody;
+  } catch {
+    return {};
+  }
+}
+
+function requestUrlVariant(request: Request): string | null {
+  return new URL(request.url).searchParams.get("variant");
+}
+
+function resolveVariantFromAgentName(
+  agentName: BackendAgent | undefined,
+): DemoVariant | undefined {
+  if (!agentName) {
+    return undefined;
+  }
+
+  const match = Object.values(DEMO_DEFINITIONS).find(
+    (definition) => definition.agent === agentName,
+  );
+  return match?.slug;
 }
 
 function buildRoomName(agent: BackendAgent): string {

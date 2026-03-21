@@ -250,6 +250,144 @@ code {
   padding: 20px;
 }
 
+.live-call-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.95fr) minmax(320px, 1.05fr);
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.live-call-card,
+.transcript-panel {
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.84);
+  padding: 22px;
+}
+
+.live-call-heading,
+.transcript-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.live-call-heading h2,
+.transcript-header h2 {
+  margin: 0;
+  font-size: 1.08rem;
+}
+
+.live-call-heading span,
+.transcript-state,
+.agent-wave-state {
+  color: var(--page-muted);
+  font-size: 0.9rem;
+}
+
+.visualizer-card {
+  display: grid;
+  gap: 20px;
+  align-content: start;
+}
+
+.agent-wave-shell {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  padding: 20px 0 4px;
+}
+
+.agent-wave {
+  width: 100%;
+  height: auto;
+}
+
+.agent-wave-baseline,
+.agent-wave-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-wave-baseline {
+  stroke: rgba(11, 114, 133, 0.14);
+  stroke-width: 2;
+}
+
+.agent-wave-line {
+  stroke: var(--accent);
+  filter: drop-shadow(0 8px 20px rgba(11, 114, 133, 0.18));
+}
+
+.agent-wave-thinking .agent-wave-line,
+.agent-wave-initializing .agent-wave-line,
+.agent-wave-connecting .agent-wave-line {
+  stroke-dasharray: 8 10;
+  animation: drift 1.8s linear infinite;
+}
+
+.agent-wave-speaking .agent-wave-line {
+  filter: drop-shadow(0 12px 24px rgba(11, 114, 133, 0.28));
+}
+
+.agent-wave-disconnected .agent-wave-line,
+.agent-wave-failed .agent-wave-line {
+  opacity: 0.45;
+}
+
+.transcript-panel {
+  display: grid;
+  gap: 16px;
+  min-height: 320px;
+}
+
+.transcript-list {
+  display: grid;
+  gap: 12px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.transcript-empty {
+  margin: 0;
+  color: var(--page-muted);
+  line-height: 1.6;
+}
+
+.transcript-message {
+  border-radius: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(18, 35, 61, 0.08);
+}
+
+.transcript-user {
+  background: rgba(11, 114, 133, 0.08);
+}
+
+.transcript-agent {
+  background: rgba(255, 248, 235, 0.9);
+}
+
+.transcript-chat {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.transcript-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--page-muted);
+  font-size: 0.82rem;
+}
+
+.transcript-message p {
+  margin: 8px 0 0;
+  line-height: 1.55;
+}
+
 .notes-panel h2 {
   margin: 0 0 12px;
   font-size: 1.05rem;
@@ -300,6 +438,15 @@ code {
   --accent-strong: #823812;
 }
 
+@keyframes drift {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -36;
+  }
+}
+
 @media (max-width: 720px) {
   .landing-panel,
   .demo-panel {
@@ -313,7 +460,14 @@ code {
   }
 
   .status-grid,
-  .runtime-panel {
+  .runtime-panel,
+  .live-call-grid {
     grid-template-columns: 1fr;
+  }
+
+  .live-call-heading,
+  .transcript-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

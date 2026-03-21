@@ -20,6 +20,7 @@ The frontend server uses these values to:
 
 1. create a room with room metadata such as `{"agent":"dental"}`
 2. issue a participant token for the browser
+3. let the browser connect through LiveKit Session APIs used by the demo UI
 
 ## Run the demo
 
@@ -39,6 +40,13 @@ npm run dev
 ```
 
 Open `http://localhost:5173` and choose either the dentist or restaurant demo.
+
+The demo page now includes:
+
+- browser speaker-audio enable control for autoplay-restricted browsers
+- remote agent audio playback
+- agent waveform visualization
+- live transcript history for user and agent speech
 
 ## Dispatch behavior
 
