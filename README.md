@@ -289,6 +289,13 @@ openrtc list \
 These CLI defaults are raw passthrough strings for `livekit-agents`, not
 provider-object construction.
 
+Stable output for scripts and CI:
+
+- `--plain` — line-oriented text without ANSI or table borders (similar to the
+  legacy `print` format).
+- `--json` — machine-readable JSON; combine with `--resources` to include
+  footprint fields and platform-specific RSS metadata.
+
 ### Run in production mode
 
 ```bash

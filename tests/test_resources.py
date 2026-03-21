@@ -9,6 +9,8 @@ from openrtc.resources import (
     agent_disk_footprints,
     file_size_bytes,
     format_byte_size,
+    get_process_resident_set_info,
+    process_resident_set_bytes,
 )
 
 
@@ -35,6 +37,17 @@ def test_agent_disk_footprints_skips_unknown_paths() -> None:
     pool.add("a", TinyAgent)
     cfg = pool.get("a")
     assert agent_disk_footprints([cfg]) == []
+
+
+def test_process_resident_set_bytes_matches_info() -> None:
+    info = get_process_resident_set_info()
+    assert info.metric in (
+        "linux_vm_rss",
+        "darwin_ru_max_rss",
+        "unavailable",
+    )
+    assert len(info.description) > 5
+    assert process_resident_set_bytes() == info.bytes_value
 
 
 def test_agent_disk_footprints_includes_registered_paths(tmp_path: Path) -> None:

@@ -21,6 +21,20 @@ class AgentDiskFootprint:
     size_bytes: int
 
 
+@dataclass(frozen=True, slots=True)
+class ProcessResidentSetInfo:
+    """Best-effort resident-memory-related metric for this process (platform-specific)."""
+
+    bytes_value: int | None
+    """Numeric value when available, else ``None``."""
+
+    metric: str
+    """Stable identifier: ``linux_vm_rss``, ``darwin_ru_max_rss``, or ``unavailable``."""
+
+    description: str
+    """Plain-language meaning of ``bytes_value`` on this platform."""
+
+
 def format_byte_size(num_bytes: int) -> str:
     """Return a short human-readable size string using binary units."""
     if num_bytes < 0:
@@ -62,18 +76,52 @@ def agent_disk_footprints(configs: Sequence[AgentConfig]) -> list[AgentDiskFootp
     return footprints
 
 
-def process_resident_set_bytes() -> int | None:
-    """Best-effort current resident set size (RSS) for this process.
+def get_process_resident_set_info() -> ProcessResidentSetInfo:
+    """Return platform-specific RSS-related metrics for this process.
 
-    Returns:
-        RSS in bytes on supported platforms, or ``None`` if unavailable
-        (e.g. some Windows builds).
+    The returned :attr:`ProcessResidentSetInfo.bytes_value` is **not** always
+    comparable across operating systems:
+
+    - **Linux**: current resident set size (VmRSS from ``/proc/self/status``).
+    - **macOS**: maximum resident set size from :func:`resource.getrusage`
+      (``ru_maxrss`` in bytes), which tracks peak usage—not necessarily the
+      current instantaneous RSS.
+    - **Other** (e.g. Windows): unavailable here (``None``).
     """
     if sys.platform.startswith("linux"):
-        return _linux_rss_bytes()
+        value = _linux_rss_bytes()
+        return ProcessResidentSetInfo(
+            bytes_value=value,
+            metric="linux_vm_rss",
+            description=(
+                "Current resident set size (VmRSS from /proc/self/status), in bytes."
+            ),
+        )
     if sys.platform == "darwin":
-        return _macos_rss_bytes()
-    return None
+        value = _macos_rss_bytes()
+        return ProcessResidentSetInfo(
+            bytes_value=value,
+            metric="darwin_ru_max_rss",
+            description=(
+                "Maximum resident set size from getrusage (ru_maxrss), in bytes; "
+                "not the same as instantaneous current RSS."
+            ),
+        )
+    return ProcessResidentSetInfo(
+        bytes_value=None,
+        metric="unavailable",
+        description="RSS not available on this platform (e.g. Windows).",
+    )
+
+
+def process_resident_set_bytes() -> int | None:
+    """Return RSS-related bytes for this process, or ``None`` if unknown.
+
+    Prefer :func:`get_process_resident_set_info` when you need platform context.
+    This function returns only the numeric value (same rules as
+    :func:`get_process_resident_set_info`).
+    """
+    return get_process_resident_set_info().bytes_value
 
 
 def _linux_rss_bytes() -> int | None:
