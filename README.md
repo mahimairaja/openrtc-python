@@ -61,7 +61,16 @@ You already ship three voice agents with `livekit-agents`. Each agent is its own
 pip install openrtc
 ```
 
-The base install pulls in `livekit-agents[openai,silero,turn-detector]` so shared prewarm has the plugins it expects.
+The base install pulls in `livekit-agents[openai,silero,turn-detector]` so shared prewarm has the plugins it expects. The package ships a **PEP 561** `py.typed` marker for downstream type checkers.
+
+With **uv** (recommended in [CONTRIBUTING.md](CONTRIBUTING.md)):
+
+```bash
+uv add openrtc
+uv add "openrtc[cli,tui]"
+```
+
+On **CPython 3.10**, a conditional `onnxruntime` pin keeps resolution compatible with wheels (newer `onnxruntime` releases are 3.11+ only). Prefer **3.11+** if you hit resolver issues.
 
 ```bash
 pip install 'openrtc[cli]'
@@ -253,6 +262,7 @@ Everything openrtc exposes publicly is listed here. Anything else is internal an
 - `AgentConfig`
 - `AgentDiscoveryConfig`
 - `agent_config(...)`
+- `ProviderValue` — type alias for STT/LLM/TTS slot values (provider ID strings or LiveKit plugin instances)
 
 On `AgentPool`:
 
@@ -271,11 +281,18 @@ On `AgentPool`:
 ```text
 src/openrtc/
 ├── __init__.py
-├── cli.py
-├── cli_app.py
-├── metrics_stream.py
-├── tui_app.py
-└── pool.py
+├── py.typed
+├── cli.py                 # lazy console entry / missing-extra hints
+├── cli_app.py             # Typer commands and programmatic main()
+├── cli_types.py           # shared CLI option aliases
+├── cli_dashboard.py     # Rich dashboard and list output
+├── cli_reporter.py        # background metrics reporter thread
+├── cli_livekit.py         # LiveKit argv/env handoff, pool run
+├── cli_params.py          # shared worker handoff option bundles
+├── metrics_stream.py      # JSONL metrics schema
+├── provider_types.py      # ProviderValue and related typing
+├── tui_app.py             # optional Textual sidecar
+└── pool.py                # AgentPool, discovery, routing
 ```
 
 - `pool.py` — `AgentPool`, discovery, routing
@@ -285,7 +302,8 @@ src/openrtc/
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). CI runs **Ruff** and **mypy** on pull
+requests alongside the test suite.
 
 ## License
 

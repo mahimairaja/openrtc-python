@@ -3,7 +3,11 @@
 ## Requirements
 
 OpenRTC currently supports Python `>=3.10,<3.14` and depends on
-`livekit-agents[openai,silero,turn-detector]~=1.4`.
+`livekit-agents[openai,silero,turn-detector]~=1.4`. On **Python 3.10** the
+resolver keeps a compatible `onnxruntime` release (LiveKit’s Silero /
+turn-detector stack depends on it); **3.11+** is the smoothest path if you see
+install issues. See the repository’s `CONTRIBUTING.md` for `uv` workflows and
+Python 3.10 notes.
 
 ## Install
 
@@ -12,7 +16,15 @@ pip install openrtc
 ```
 
 The base package includes the LiveKit Silero and turn-detector plugins used by
-OpenRTC's shared prewarm path.
+OpenRTC's shared prewarm path. The wheel includes **PEP 561** `py.typed` for type
+checkers.
+
+With **uv**:
+
+```bash
+uv add openrtc
+uv add "openrtc[cli,tui]"
+```
 
 Install the **Typer/Rich CLI** (`openrtc list`, `openrtc start`, `openrtc dev`,
 `openrtc console`, …) with:
