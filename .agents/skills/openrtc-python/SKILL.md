@@ -122,7 +122,7 @@ openrtc start --agents-dir ./agents
 # openrtc connect --agents-dir ./agents --room my-room
 
 # Optional: JSON Lines metrics + sidecar TUI (pip install 'openrtc[cli,tui]')
-# openrtc dev --agents-dir ./agents --metrics-jsonl ./openrtc-metrics.jsonl
+# openrtc dev ./agents ./openrtc-metrics.jsonl
 # openrtc tui
 
 # Or run the entrypoint directly

@@ -41,12 +41,16 @@ with `1`.
    export LIVEKIT_API_SECRET=secret
    ```
 
-2. Run a worker subcommand with **only** `--agents-dir` (plus any provider
-   defaults your agents need):
+2. Run a worker subcommand with an agents directory (plus any provider defaults
+   your agents need). You can pass **`--agents-dir`** or use the **first
+   positional argument** on ``start`` / ``dev`` / ``console``; a **second**
+   positional sets ``--metrics-jsonl`` (unless you already passed that flag):
 
    ```bash
-   openrtc dev --agents-dir ./agents
-   # or
+   openrtc dev ./agents
+   openrtc dev ./agents ./openrtc-metrics.jsonl
+   # equivalent to:
+   openrtc dev --agents-dir ./agents --metrics-jsonl ./openrtc-metrics.jsonl
    openrtc start --agents-dir ./agents
    ```
 
@@ -148,7 +152,7 @@ directory. Pass **`--watch PATH`** to use another file (it must match
 
 ```bash
 # Terminal 1
-openrtc dev --agents-dir ./agents --metrics-jsonl ./openrtc-metrics.jsonl
+openrtc dev ./agents ./openrtc-metrics.jsonl
 
 # Terminal 2 (same default file as above)
 openrtc tui

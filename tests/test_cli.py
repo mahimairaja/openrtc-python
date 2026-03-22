@@ -275,6 +275,45 @@ def test_list_exits_cleanly_when_agents_dir_does_not_exist(
     assert "does not exist" in caplog.text
 
 
+def test_inject_worker_positional_paths_rewrites_agents_and_metrics() -> None:
+    from openrtc.cli_livekit import inject_worker_positional_paths
+
+    assert inject_worker_positional_paths(
+        ["dev", "./agents", "./openrtc-metrics.jsonl", "--reload"],
+    ) == [
+        "dev",
+        "--agents-dir",
+        "./agents",
+        "--metrics-jsonl",
+        "./openrtc-metrics.jsonl",
+        "--reload",
+    ]
+    assert inject_worker_positional_paths(
+        ["dev", "./agents", "--reload"],
+    ) == ["dev", "--agents-dir", "./agents", "--reload"]
+    assert inject_worker_positional_paths(
+        ["dev", "--agents-dir", "./agents", "--reload"],
+    ) == ["dev", "--agents-dir", "./agents", "--reload"]
+
+
+def test_dev_positional_agents_rewrites_before_typer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``openrtc dev ./agents`` is rewritten to ``--agents-dir`` in :func:`main`."""
+    import openrtc.cli_livekit as cli_livekit_mod
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    stub_pool = StubPool(discovered=[StubConfig(name="a", agent_cls=StubAgent)])
+    monkeypatch.setattr(cli_livekit_mod, "AgentPool", lambda **kwargs: stub_pool)
+    monkeypatch.setattr(
+        cli_livekit_mod, "_run_pool_with_reporting", lambda *a, **k: None
+    )
+    exit_code = main(["dev", str(agents)])
+    assert exit_code == 0
+
+
 def test_strip_openrtc_only_flags_for_livekit_removes_openrtc_options() -> None:
     """LiveKit ``run_app`` must not see OpenRTC-only flags (see ``_livekit_sys_argv``)."""
     from openrtc.cli_app import _strip_openrtc_only_flags_for_livekit

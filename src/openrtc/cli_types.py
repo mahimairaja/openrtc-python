@@ -17,7 +17,10 @@ AgentsDirArg = Annotated[
     Path,
     typer.Option(
         "--agents-dir",
-        help="Directory of agent modules to load (only required flag for most workflows).",
+        help=(
+            "Directory of agent modules to load. On start/dev/console you may pass "
+            "the same path as the first argument instead (e.g. openrtc dev ./agents)."
+        ),
         exists=False,
         resolve_path=True,
         path_type=Path,

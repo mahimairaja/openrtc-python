@@ -24,6 +24,7 @@ from openrtc.cli_livekit import (
     _run_connect_handoff,
     _run_pool_with_reporting,
     _strip_openrtc_only_flags_for_livekit,
+    inject_worker_positional_paths,
 )
 from openrtc.cli_params import SharedLiveKitWorkerOptions, agent_provider_kwargs
 from openrtc.cli_reporter import RuntimeReporter
@@ -57,7 +58,8 @@ logger = logging.getLogger("openrtc")
 _QUICKSTART_EPILOG = (
     "[bold]Typical usage[/bold]: set [code]LIVEKIT_URL[/code], [code]LIVEKIT_API_KEY[/code], "
     "and [code]LIVEKIT_API_SECRET[/code], then run "
-    "[code]openrtc dev --agents-dir PATH[/code] (or [code]start[/code] in production). "
+    "[code]openrtc dev ./agents[/code] or [code]openrtc dev --agents-dir PATH[/code] "
+    "(or [code]start[/code] in production). "
     "Defaults are conservative (e.g. no dashboard, 1s refresh); tuning flags are under "
     "the [bold]Advanced[/bold] group in each command's [code]--help[/code]."
 )
@@ -68,7 +70,8 @@ app = typer.Typer(
         "Run multiple LiveKit voice agents from one shared worker. Commands match "
         "LiveKit Agents ([code]dev[/code], [code]start[/code], [code]console[/code], "
         "[code]connect[/code], [code]download-files[/code]) plus [code]list[/code] and "
-        "[code]tui[/code]. Only [code]--agents-dir[/code] is required for worker commands; "
+        "[code]tui[/code]. Worker commands need an agents directory via "
+        "[code]--agents-dir[/code] or the first positional argument; "
         "credentials use [code]LIVEKIT_*[/code] env vars by default (CLI flags optional)."
     ),
     epilog=_QUICKSTART_EPILOG,
@@ -317,8 +320,15 @@ def main(argv: list[str] | None = None) -> int:
     previous_argv = sys.argv
     try:
         if argv is not None:
-            cli.main(args=list(argv), prog_name="openrtc", standalone_mode=True)
+            cli.main(
+                args=inject_worker_positional_paths(list(argv)),
+                prog_name="openrtc",
+                standalone_mode=True,
+            )
         else:
+            if len(sys.argv) >= 2 and sys.argv[1] in {"start", "dev", "console"}:
+                tail = inject_worker_positional_paths(list(sys.argv[1:]))
+                sys.argv = [sys.argv[0], *tail]
             cli.main(args=None, prog_name="openrtc", standalone_mode=True)
     except SystemExit as exc:
         code = exc.code

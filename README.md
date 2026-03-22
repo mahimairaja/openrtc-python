@@ -247,8 +247,10 @@ openrtc start --agents-dir ./agents
 **Run a development worker**:
 
 ```bash
-openrtc dev --agents-dir ./agents
+openrtc dev ./agents
 ```
+
+Same as ``openrtc dev --agents-dir ./agents``. Add a second path for JSONL metrics (same as ``--metrics-jsonl``), e.g. ``openrtc dev ./agents ./openrtc-metrics.jsonl``.
 
 Optional visibility: `--dashboard` prints a Rich summary in the terminal. `--metrics-json-file ./runtime.json` overwrites a JSON snapshot on each tick. Use that for scripts, dashboards, or CI. For JSON Lines plus a separate terminal UI, use `--metrics-jsonl ./openrtc-metrics.jsonl` on the worker and `openrtc tui` in another terminal (it tails `./openrtc-metrics.jsonl` by default; override with `--watch`) after `pip install 'openrtc[cli,tui]'`.
 

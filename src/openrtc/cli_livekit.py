@@ -78,6 +78,32 @@ def _strip_openrtc_only_flags_for_livekit(argv_tail: list[str]) -> list[str]:
     return out
 
 
+def inject_worker_positional_paths(argv: list[str]) -> list[str]:
+    """Rewrite ``dev|start|console ./agents [./metrics.jsonl]`` into flagged form.
+
+    LiveKit pass-through tokens (e.g. ``--reload``) must not be parsed as paths.
+    This runs **before** Typer so unknown options stay in ``ctx.args`` unchanged.
+    """
+    if not argv or argv[0] not in {"start", "dev", "console"}:
+        return argv
+    rest = argv[1:]
+    if not rest or rest[0].startswith("-"):
+        return argv
+    if any(t == "--agents-dir" or t.startswith("--agents-dir=") for t in rest):
+        return argv
+    has_metrics_flag = any(
+        t == "--metrics-jsonl" or t.startswith("--metrics-jsonl=") for t in rest
+    )
+    agents_token = rest[0]
+    out = [argv[0], "--agents-dir", agents_token]
+    pos = 1
+    if not has_metrics_flag and pos < len(rest) and not rest[pos].startswith("-"):
+        out.extend(["--metrics-jsonl", rest[pos]])
+        pos += 1
+    out.extend(rest[pos:])
+    return out
+
+
 def _livekit_sys_argv(subcommand: str) -> None:
     """Set ``sys.argv`` for ``livekit.agents.cli.run_app``.
 
