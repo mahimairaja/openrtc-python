@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -23,6 +24,7 @@ from openrtc.cli_livekit import (
     _run_connect_handoff,
     _run_pool_with_reporting,
     _strip_openrtc_only_flags_for_livekit,
+    inject_cli_positional_paths,
 )
 from openrtc.cli_params import SharedLiveKitWorkerOptions, agent_provider_kwargs
 from openrtc.cli_reporter import RuntimeReporter
@@ -48,6 +50,7 @@ from openrtc.cli_types import (
     TuiFromStartArg,
     TuiWatchPathArg,
 )
+from openrtc.metrics_stream import DEFAULT_METRICS_JSONL_FILENAME
 from openrtc.pool import AgentPool
 
 logger = logging.getLogger("openrtc")
@@ -55,7 +58,9 @@ logger = logging.getLogger("openrtc")
 _QUICKSTART_EPILOG = (
     "[bold]Typical usage[/bold]: set [code]LIVEKIT_URL[/code], [code]LIVEKIT_API_KEY[/code], "
     "and [code]LIVEKIT_API_SECRET[/code], then run "
-    "[code]openrtc dev --agents-dir PATH[/code] (or [code]start[/code] in production). "
+    "[code]openrtc dev ./agents[/code] (agents dir only) or add a second path for "
+    "[code]--metrics-jsonl[/code]; or use [code]--agents-dir[/code]. "
+    "[code]start[/code] for production. "
     "Defaults are conservative (e.g. no dashboard, 1s refresh); tuning flags are under "
     "the [bold]Advanced[/bold] group in each command's [code]--help[/code]."
 )
@@ -66,7 +71,11 @@ app = typer.Typer(
         "Run multiple LiveKit voice agents from one shared worker. Commands match "
         "LiveKit Agents ([code]dev[/code], [code]start[/code], [code]console[/code], "
         "[code]connect[/code], [code]download-files[/code]) plus [code]list[/code] and "
-        "[code]tui[/code]. Only [code]--agents-dir[/code] is required for worker commands; "
+        "[code]tui[/code]. Most commands accept the agents directory as the first "
+        "positional argument instead of [code]--agents-dir[/code]; "
+        "[code]start[/code]/[code]dev[/code]/[code]console[/code] also accept a "
+        "second path for [code]--metrics-jsonl[/code], and [code]tui[/code] can "
+        "take a metrics file path as the first positional instead of [code]--watch[/code]; "
         "credentials use [code]LIVEKIT_*[/code] env vars by default (CLI flags optional)."
     ),
     epilog=_QUICKSTART_EPILOG,
@@ -137,18 +146,28 @@ def list_command(
         print_resource_summary_rich(discovered)
 
 
+_WORKER_POSITIONAL_HELP = (
+    " Use [code]openrtc {name} ./agents[/code] or [code]--agents-dir ./agents[/code]; "
+    "add a second path only when you want JSONL metrics "
+    f"([code]--metrics-jsonl[/code], e.g. [code]./{DEFAULT_METRICS_JSONL_FILENAME}[/code] for "
+    "[code]openrtc tui[/code])."
+)
+
 _STANDARD_LIVEKIT_WORKER_SPECS: tuple[tuple[str, str], ...] = (
     (
         "start",
-        "Run the worker (same role as [code]python agent.py start[/code] with LiveKit).",
+        "Run the worker (same role as [code]python agent.py start[/code] with LiveKit)."
+        + _WORKER_POSITIONAL_HELP.format(name="start"),
     ),
     (
         "dev",
-        "Development worker with reload (same role as [code]python agent.py dev[/code]).",
+        "Development worker with reload (same role as [code]python agent.py dev[/code])."
+        + _WORKER_POSITIONAL_HELP.format(name="dev"),
     ),
     (
         "console",
-        "Local console session (same role as [code]python agent.py console[/code]).",
+        "Local console session (same role as [code]python agent.py console[/code])."
+        + _WORKER_POSITIONAL_HELP.format(name="console"),
     ),
 )
 
@@ -273,10 +292,14 @@ def download_files_command(
 
 @app.command("tui")
 def tui_command(
-    watch: TuiWatchPathArg,
+    watch: TuiWatchPathArg = Path(DEFAULT_METRICS_JSONL_FILENAME),
     from_start: TuiFromStartArg = False,
 ) -> None:
-    """Sidecar Textual UI for a --metrics-jsonl stream (requires the ``tui`` extra)."""
+    """Sidecar Textual UI tailing JSONL metrics (requires the ``tui`` extra).
+
+    With no ``--watch``, tails ``./openrtc-metrics.jsonl`` in the current directory;
+    start the worker with ``--metrics-jsonl`` set to that same path.
+    """
     try:
         from openrtc.tui_app import run_metrics_tui
     except ImportError as exc:
@@ -285,7 +308,11 @@ def tui_command(
             "(the cli extra is required for the openrtc command)."
         )
         raise typer.Exit(code=1) from exc
-    run_metrics_tui(watch, from_start=from_start)
+    try:
+        run_metrics_tui(watch, from_start=from_start)
+    except ValueError as exc:
+        logger.error("%s", exc)
+        raise typer.Exit(code=1) from None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -307,8 +334,19 @@ def main(argv: list[str] | None = None) -> int:
     previous_argv = sys.argv
     try:
         if argv is not None:
-            cli.main(args=list(argv), prog_name="openrtc", standalone_mode=True)
+            injected_args = inject_cli_positional_paths(list(argv))
+            # Mirror a real CLI invocation so LiveKit handoff logic that
+            # inspects sys.argv sees the injected arguments (e.g. --reload).
+            sys.argv = [previous_argv[0], *injected_args]
+            cli.main(
+                args=injected_args,
+                prog_name="openrtc",
+                standalone_mode=True,
+            )
         else:
+            if len(sys.argv) >= 2:
+                tail = inject_cli_positional_paths(list(sys.argv[1:]))
+                sys.argv = [sys.argv[0], *tail]
             cli.main(args=None, prog_name="openrtc", standalone_mode=True)
     except SystemExit as exc:
         code = exc.code

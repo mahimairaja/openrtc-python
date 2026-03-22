@@ -7,6 +7,8 @@ from typing import Annotated
 
 import typer
 
+from openrtc.metrics_stream import DEFAULT_METRICS_JSONL_FILENAME
+
 PANEL_OPENRTC = "OpenRTC"
 PANEL_LIVEKIT = "Connection"
 PANEL_ADVANCED = "Advanced"
@@ -15,7 +17,12 @@ AgentsDirArg = Annotated[
     Path,
     typer.Option(
         "--agents-dir",
-        help="Directory of agent modules to load (only required flag for most workflows).",
+        help=(
+            "Directory of agent modules to load. Pass the same path as the first "
+            "positional argument instead of this flag where supported (e.g. "
+            "openrtc list ./agents or openrtc dev ./agents). On start/dev/console "
+            "only, an optional second positional sets --metrics-jsonl."
+        ),
         exists=False,
         resolve_path=True,
         path_type=Path,
@@ -106,8 +113,11 @@ MetricsJsonlArg = Annotated[
     typer.Option(
         "--metrics-jsonl",
         help=(
-            "Append JSON Lines for ``openrtc tui --watch`` (off by default; "
-            "truncates when the worker starts)."
+            "Append JSON Lines for the sidecar TUI (off by default; truncates when "
+            "the worker starts). For the default ``openrtc tui`` file, use "
+            f"``./{DEFAULT_METRICS_JSONL_FILENAME}`` here. On ``start``/``dev``/``console`` "
+            "you may pass that path as the **second** positional after the agents directory "
+            "(optional—omit it if you only need to point at the agents folder)."
         ),
         resolve_path=True,
         path_type=Path,
@@ -129,7 +139,13 @@ TuiWatchPathArg = Annotated[
     Path,
     typer.Option(
         "--watch",
-        help="JSONL file written by the worker's --metrics-jsonl.",
+        show_default=True,
+        help=(
+            "JSONL file the worker writes with --metrics-jsonl (not your "
+            f"--agents-dir). Defaults to ./{DEFAULT_METRICS_JSONL_FILENAME}; pass "
+            "the same path to --metrics-jsonl on the worker, or pass PATH as the "
+            "first positional argument instead of --watch."
+        ),
         resolve_path=True,
         path_type=Path,
         rich_help_panel=PANEL_OPENRTC,

@@ -226,13 +226,13 @@ If you pass strings such as `openai/gpt-4.1-mini`, OpenRTC leaves them as-is and
 
 ## CLI and TUI
 
-Install `openrtc[cli]` to get `openrtc` on your PATH. Subcommands follow the LiveKit Agents CLI shape (`dev`, `start`, `console`, `connect`, `download-files`), plus `list` and `tui`.
+Install `openrtc[cli]` to get `openrtc` on your PATH. Subcommands follow the LiveKit Agents CLI shape (`dev`, `start`, `console`, `connect`, `download-files`), plus `list` and `tui`. For most commands you can pass the agents directory (or, for `tui`, the metrics JSONL file) as the first path argument instead of `--agents-dir` / `--watch`.
 
 **List what discovery would register** (defaults are string passthroughs for `livekit-agents`, not constructed provider objects):
 
 ```bash
 openrtc list \
-  --agents-dir ./agents \
+  ./agents \
   --default-stt openai/gpt-4o-mini-transcribe \
   --default-llm openai/gpt-4.1-mini \
   --default-tts openai/gpt-4o-mini-tts
@@ -241,16 +241,18 @@ openrtc list \
 **Run a production worker** (after exporting `LIVEKIT_*`):
 
 ```bash
-openrtc start --agents-dir ./agents
+openrtc start ./agents
 ```
 
 **Run a development worker**:
 
 ```bash
-openrtc dev --agents-dir ./agents
+openrtc dev ./agents
 ```
 
-Optional visibility: `--dashboard` prints a Rich summary in the terminal. `--metrics-json-file ./runtime.json` overwrites a JSON snapshot on each tick. Use that for scripts, dashboards, or CI. For JSON Lines plus a separate terminal UI, use `--metrics-jsonl ./metrics.jsonl` with `openrtc tui --watch ./metrics.jsonl` after `pip install 'openrtc[cli,tui]'`.
+Same as ``openrtc dev --agents-dir ./agents``. The metrics JSONL file is **optional**: add a second path only when you want JSONL output (same as ``--metrics-jsonl``), e.g. ``openrtc dev ./agents ./openrtc-metrics.jsonl`` for ``openrtc tui``.
+
+Optional visibility: `--dashboard` prints a Rich summary in the terminal. `--metrics-json-file ./runtime.json` overwrites a JSON snapshot on each tick. Use that for scripts, dashboards, or CI. For JSON Lines plus a separate terminal UI, use `--metrics-jsonl ./openrtc-metrics.jsonl` on the worker and `openrtc tui` in another terminal (it tails `./openrtc-metrics.jsonl` by default; override with `--watch`) after `pip install 'openrtc[cli,tui]'`.
 
 Stable machine output: `openrtc list --json` and `--plain`. Combine `--resources` when you want footprint hints. OpenRTC-only flags are stripped before the handoff to LiveKit’s CLI parser.
 

@@ -32,7 +32,7 @@ Install the **Typer/Rich CLI** (`openrtc list`, `openrtc start`, `openrtc dev`,
 pip install 'openrtc[cli]'
 ```
 
-Install the optional **Textual sidecar** for `openrtc tui --watch` with:
+Install the optional **Textual sidecar** for `openrtc tui` with:
 
 ```bash
 pip install 'openrtc[cli,tui]'
@@ -56,7 +56,7 @@ With `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` set, the minimal
 worker invocation is:
 
 ```bash
-openrtc dev --agents-dir ./agents
+openrtc dev ./agents
 ```
 
 Use `openrtc start` for production-style runs. See [CLI](./cli) for `console`,

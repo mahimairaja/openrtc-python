@@ -41,12 +41,18 @@ with `1`.
    export LIVEKIT_API_SECRET=secret
    ```
 
-2. Run a worker subcommand with **only** `--agents-dir` (plus any provider
-   defaults your agents need):
+2. Run a worker subcommand with an agents directory (plus any provider defaults
+   your agents need). You can pass **`--agents-dir`** or use the **first
+   positional argument** on ``start`` / ``dev`` / ``console``. A **second**
+   positional is **optional** and only sets ``--metrics-jsonl`` when you want JSONL
+   metrics (e.g. for ``openrtc tui``); skip it if you only need the agents
+   directory (unless you already passed ``--metrics-jsonl``).
 
    ```bash
-   openrtc dev --agents-dir ./agents
-   # or
+   openrtc dev ./agents
+   openrtc dev ./agents ./openrtc-metrics.jsonl
+   # equivalent to:
+   openrtc dev --agents-dir ./agents --metrics-jsonl ./openrtc-metrics.jsonl
    openrtc start --agents-dir ./agents
    ```
 
@@ -74,6 +80,12 @@ flag.
 
 ## Commands
 
+Across **list**, **connect**, **download-files**, **start** / **dev** / **console**,
+and **tui**, you can often pass paths **positionally** instead of `--agents-dir`,
+`--metrics-jsonl`, or `--watch` (see each command below). The first non-flag
+token after the subcommand is rewritten before parsing; use `--agents-dir` /
+`--watch` when you need a different argument order.
+
 ### `openrtc list`
 
 Discovers agent modules and prints each agent’s resolved settings.
@@ -89,9 +101,9 @@ Discovers agent modules and prints each agent’s resolved settings.
   `--help`).
 
 ```bash
-openrtc list --agents-dir ./agents
+openrtc list ./agents
 openrtc list --agents-dir ./agents --plain
-openrtc list --agents-dir ./agents --json
+openrtc list ./agents --json
 ```
 
 ### `openrtc start`
@@ -99,7 +111,7 @@ openrtc list --agents-dir ./agents --json
 Production-style worker (same role as `python agent.py start`).
 
 ```bash
-openrtc start --agents-dir ./agents
+openrtc start ./agents
 ```
 
 ### `openrtc dev`
@@ -107,7 +119,7 @@ openrtc start --agents-dir ./agents
 Development worker with reload (same role as `python agent.py dev`).
 
 ```bash
-openrtc dev --agents-dir ./agents
+openrtc dev ./agents
 ```
 
 ### `openrtc console`
@@ -115,7 +127,7 @@ openrtc dev --agents-dir ./agents
 Local console session (same role as `python agent.py console`).
 
 ```bash
-openrtc console --agents-dir ./agents
+openrtc console ./agents
 ```
 
 ### `openrtc connect`
@@ -124,7 +136,7 @@ Connect the worker to an existing room (LiveKit `connect`). Requires
 `--room`.
 
 ```bash
-openrtc connect --agents-dir ./agents --room my-room
+openrtc connect ./agents --room my-room
 ```
 
 ### `openrtc download-files`
@@ -134,7 +146,7 @@ directory (for a valid worker entrypoint) plus connection settings—**no**
 `--default-stt` / `--default-llm` / `--default-tts` / `--default-greeting`.
 
 ```bash
-openrtc download-files --agents-dir ./agents
+openrtc download-files ./agents
 ```
 
 ### `openrtc tui`
@@ -142,12 +154,22 @@ openrtc download-files --agents-dir ./agents
 Sidecar Textual UI that tails a **JSON Lines** metrics file written by the
 worker (`--metrics-jsonl`). Requires `openrtc[tui]`.
 
+With no flags, the TUI tails **`./openrtc-metrics.jsonl`** in the current working
+directory. Pass **`--watch PATH`** or a **positional path** to use another file
+(it must match `--metrics-jsonl` on the worker).
+
 ```bash
 # Terminal 1
-openrtc dev --agents-dir ./agents --metrics-jsonl ./openrtc-metrics.jsonl
+openrtc dev ./agents ./openrtc-metrics.jsonl
 
-# Terminal 2
-openrtc tui --watch ./openrtc-metrics.jsonl
+# Terminal 2 (same default file as above)
+openrtc tui
+
+# Or pass the file positionally:
+# openrtc tui ./openrtc-metrics.jsonl
+
+# Equivalent explicit form:
+# openrtc tui --watch ./openrtc-metrics.jsonl
 ```
 
 Use **`--from-start`** (under **Advanced**) to read the file from the beginning
@@ -164,7 +186,7 @@ instead of tailing from EOF.
   (`snapshot` or `event`), `seq`, `wall_time_unix`, `payload`. Snapshots match
   `PoolRuntimeSnapshot.to_dict()`; events carry session lifecycle hints
   (`session_started`, `session_finished`, `session_failed`). Intended for
-  `openrtc tui --watch` and other tail consumers.
+  `openrtc tui` and other tail consumers.
 - **`--dashboard-refresh`** — Interval in seconds for dashboard, metrics file,
   and JSONL when `--metrics-jsonl-interval` is not set (**Advanced**).
 - **`--metrics-jsonl-interval`** — Override JSONL cadence only (**Advanced**).
@@ -244,7 +266,8 @@ openrtc list --agents-dir ./examples/agents --resources --json
      --metrics-jsonl ./openrtc-metrics.jsonl
    ```
 
-3. Watch the dashboard (or `openrtc tui --watch ./openrtc-metrics.jsonl`) for
+3. Watch the dashboard (or run `openrtc tui` in another terminal for the same
+   default JSONL file) for
    worker RSS, active sessions, routing, and errors.
 
 4. Use `runtime.json` or the JSONL stream for automation or scraping.

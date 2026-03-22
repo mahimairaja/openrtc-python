@@ -275,6 +275,70 @@ def test_list_exits_cleanly_when_agents_dir_does_not_exist(
     assert "does not exist" in caplog.text
 
 
+def test_inject_cli_positional_paths_rewrites_shortcuts() -> None:
+    from openrtc.cli_livekit import inject_cli_positional_paths
+
+    assert inject_cli_positional_paths(
+        ["dev", "./agents", "./openrtc-metrics.jsonl", "--reload"],
+    ) == [
+        "dev",
+        "--agents-dir",
+        "./agents",
+        "--metrics-jsonl",
+        "./openrtc-metrics.jsonl",
+        "--reload",
+    ]
+    assert inject_cli_positional_paths(
+        ["dev", "./agents", "--reload"],
+    ) == ["dev", "--agents-dir", "./agents", "--reload"]
+    assert inject_cli_positional_paths(["dev", "./agents"]) == [
+        "dev",
+        "--agents-dir",
+        "./agents",
+    ]
+    assert inject_cli_positional_paths(
+        ["dev", "--agents-dir", "./agents", "--reload"],
+    ) == ["dev", "--agents-dir", "./agents", "--reload"]
+    assert inject_cli_positional_paths(
+        ["list", "./agents", "--json"],
+    ) == ["list", "--agents-dir", "./agents", "--json"]
+    assert inject_cli_positional_paths(
+        ["connect", "./agents", "--room", "demo"],
+    ) == ["connect", "--agents-dir", "./agents", "--room", "demo"]
+    assert inject_cli_positional_paths(
+        ["download-files", "./agents"],
+    ) == ["download-files", "--agents-dir", "./agents"]
+    assert inject_cli_positional_paths(
+        ["tui", "./m.jsonl", "--from-start"],
+    ) == ["tui", "--watch", "./m.jsonl", "--from-start"]
+    assert inject_cli_positional_paths(["tui"]) == ["tui"]
+    from openrtc.cli_livekit import inject_worker_positional_paths
+
+    assert inject_worker_positional_paths(
+        ["list", "./agents"]
+    ) == inject_cli_positional_paths(
+        ["list", "./agents"],
+    )
+
+
+def test_dev_positional_agents_rewrites_before_typer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``openrtc dev ./agents`` is rewritten to ``--agents-dir`` in :func:`main`."""
+    import openrtc.cli_livekit as cli_livekit_mod
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    stub_pool = StubPool(discovered=[StubConfig(name="a", agent_cls=StubAgent)])
+    monkeypatch.setattr(cli_livekit_mod, "AgentPool", lambda **kwargs: stub_pool)
+    monkeypatch.setattr(
+        cli_livekit_mod, "_run_pool_with_reporting", lambda *a, **k: None
+    )
+    exit_code = main(["dev", str(agents)])
+    assert exit_code == 0
+
+
 def test_strip_openrtc_only_flags_for_livekit_removes_openrtc_options() -> None:
     """LiveKit ``run_app`` must not see OpenRTC-only flags (see ``_livekit_sys_argv``)."""
     from openrtc.cli_app import _strip_openrtc_only_flags_for_livekit
@@ -612,3 +676,52 @@ def test_tui_command_exits_when_textual_is_not_importable(
     assert result.exit_code == 1
     assert "Textual" in caplog.text
     assert "openrtc[tui]" in caplog.text
+
+
+def test_tui_help_documents_default_watch_path() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["tui", "--help"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert "openrtc-metrics.jsonl" in result.output
+
+
+def test_tui_command_without_watch_uses_default_metrics_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("textual")
+    import openrtc.tui_app as tu
+    from openrtc.tui_app import MetricsTuiApp
+
+    seen: list[Path] = []
+
+    def fake_run(self: MetricsTuiApp) -> None:
+        seen.append(self._path)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tu.MetricsTuiApp, "run", fake_run)
+    runner = CliRunner()
+    result = runner.invoke(app, ["tui"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert len(seen) == 1
+    assert seen[0] == (tmp_path / "openrtc-metrics.jsonl").resolve()
+
+
+def test_tui_command_rejects_watch_path_that_is_directory(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``--watch`` must be the metrics JSONL file, not a folder such as ``agents``."""
+    pytest.importorskip("textual")
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    runner = CliRunner()
+    with caplog.at_level(logging.ERROR, logger="openrtc"):
+        result = runner.invoke(
+            app,
+            ["tui", "--watch", str(agents_dir)],
+            catch_exceptions=False,
+        )
+    assert result.exit_code == 1
+    combined = caplog.text + (result.output or "")
+    assert "directory" in combined.lower()
