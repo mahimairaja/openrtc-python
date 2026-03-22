@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -16,6 +17,7 @@ from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.text import Text
 
+from openrtc.metrics_stream import JsonlMetricsSink
 from openrtc.pool import AgentConfig, AgentPool
 from openrtc.resources import (
     PoolRuntimeSnapshot,
@@ -51,7 +53,7 @@ console = Console()
 
 
 class RuntimeReporter:
-    """Background reporter that renders a Rich dashboard and/or JSON snapshots."""
+    """Background reporter: Rich dashboard, static JSON file, and/or JSONL stream."""
 
     def __init__(
         self,
@@ -60,17 +62,33 @@ class RuntimeReporter:
         dashboard: bool,
         refresh_seconds: float,
         json_output_path: Path | None,
+        metrics_jsonl_path: Path | None = None,
+        metrics_jsonl_interval: float | None = None,
     ) -> None:
         self._pool = pool
         self._dashboard = dashboard
         self._refresh_seconds = max(refresh_seconds, 0.25)
         self._json_output_path = json_output_path
+        self._jsonl_interval = (
+            max(metrics_jsonl_interval, 0.25)
+            if metrics_jsonl_interval is not None
+            else self._refresh_seconds
+        )
+        self._jsonl_sink: JsonlMetricsSink | None = None
+        if metrics_jsonl_path is not None:
+            self._jsonl_sink = JsonlMetricsSink(metrics_jsonl_path)
+            self._jsonl_sink.open()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._needs_periodic_file_or_ui = dashboard or json_output_path is not None
 
     def start(self) -> None:
         """Start the background reporter when at least one output is enabled."""
-        if not self._dashboard and self._json_output_path is None:
+        if (
+            not self._dashboard
+            and self._json_output_path is None
+            and self._jsonl_sink is None
+        ):
             return
         self._thread = threading.Thread(
             target=self._run,
@@ -85,8 +103,17 @@ class RuntimeReporter:
         if self._thread is not None:
             self._thread.join(timeout=max(self._refresh_seconds * 2, 1.0))
         self._write_json_snapshot()
+        self._write_jsonl_snapshot()
+        if self._jsonl_sink is not None:
+            self._jsonl_sink.close()
 
     def _run(self) -> None:
+        now = time.monotonic()
+        next_periodic = (
+            now + self._refresh_seconds if self._needs_periodic_file_or_ui else float("inf")
+        )
+        next_jsonl = now + self._jsonl_interval if self._jsonl_sink else float("inf")
+
         if self._dashboard:
             with Live(
                 self._build_dashboard_renderable(),
@@ -94,14 +121,46 @@ class RuntimeReporter:
                 refresh_per_second=max(int(round(1 / self._refresh_seconds)), 1),
                 transient=True,
             ) as live:
-                while not self._stop_event.wait(self._refresh_seconds):
-                    live.update(self._build_dashboard_renderable())
-                    self._write_json_snapshot()
+                while True:
+                    now = time.monotonic()
+                    wait_periodic = max(0.0, next_periodic - now)
+                    wait_jsonl = (
+                        max(0.0, next_jsonl - now)
+                        if self._jsonl_sink is not None
+                        else float("inf")
+                    )
+                    timeout = min(wait_periodic, wait_jsonl, 3600.0)
+                    if self._stop_event.wait(timeout):
+                        break
+                    now = time.monotonic()
+                    if self._needs_periodic_file_or_ui and now >= next_periodic:
+                        live.update(self._build_dashboard_renderable())
+                        self._write_json_snapshot()
+                        next_periodic += self._refresh_seconds
+                    if self._jsonl_sink is not None and now >= next_jsonl:
+                        self._write_jsonl_snapshot()
+                        next_jsonl += self._jsonl_interval
                 live.update(self._build_dashboard_renderable())
             return
 
-        while not self._stop_event.wait(self._refresh_seconds):
-            self._write_json_snapshot()
+        while True:
+            now = time.monotonic()
+            wait_periodic = max(0.0, next_periodic - now)
+            wait_jsonl = (
+                max(0.0, next_jsonl - now)
+                if self._jsonl_sink is not None
+                else float("inf")
+            )
+            timeout = min(wait_periodic, wait_jsonl, 3600.0)
+            if self._stop_event.wait(timeout):
+                break
+            now = time.monotonic()
+            if self._needs_periodic_file_or_ui and now >= next_periodic:
+                self._write_json_snapshot()
+                next_periodic += self._refresh_seconds
+            if self._jsonl_sink is not None and now >= next_jsonl:
+                self._write_jsonl_snapshot()
+                next_jsonl += self._jsonl_interval
 
     def _build_dashboard_renderable(self) -> Panel:
         snapshot = self._pool.runtime_snapshot()
@@ -116,6 +175,11 @@ class RuntimeReporter:
             json.dumps(payload, indent=2, sort_keys=True),
             encoding="utf-8",
         )
+
+    def _write_jsonl_snapshot(self) -> None:
+        if self._jsonl_sink is None:
+            return
+        self._jsonl_sink.write_snapshot(self._pool.runtime_snapshot())
 
 
 def _format_percent(saved_bytes: int | None, baseline_bytes: int | None) -> str:
@@ -272,6 +336,8 @@ _OPENRTC_ONLY_FLAGS_WITH_VALUE: frozenset[str] = frozenset(
         "--default-greeting",
         "--dashboard-refresh",
         "--metrics-json-file",
+        "--metrics-jsonl",
+        "--metrics-jsonl-interval",
     }
 )
 _OPENRTC_ONLY_BOOL_FLAGS: frozenset[str] = frozenset({"--dashboard"})
@@ -365,6 +431,8 @@ def _delegate_discovered_pool_to_livekit(
     dashboard: bool,
     dashboard_refresh: float,
     metrics_json_file: Path | None,
+    metrics_jsonl: Path | None,
+    metrics_jsonl_interval: float | None,
     url: str | None,
     api_key: str | None,
     api_secret: str | None,
@@ -385,6 +453,8 @@ def _delegate_discovered_pool_to_livekit(
         dashboard=dashboard,
         dashboard_refresh=dashboard_refresh,
         metrics_json_file=metrics_json_file,
+        metrics_jsonl=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
     )
 
 
@@ -404,6 +474,8 @@ def _run_connect_handoff(
     dashboard: bool,
     dashboard_refresh: float,
     metrics_json_file: Path | None,
+    metrics_jsonl: Path | None,
+    metrics_jsonl_interval: float | None,
 ) -> None:
     """Hand off to LiveKit ``connect`` with explicit argv (Typer consumes flags first)."""
     pool = AgentPool(
@@ -425,6 +497,8 @@ def _run_connect_handoff(
         dashboard=dashboard,
         dashboard_refresh=dashboard_refresh,
         metrics_json_file=metrics_json_file,
+        metrics_jsonl=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
     )
 
 
@@ -548,6 +622,32 @@ MetricsJsonFileArg = Annotated[
         help="Write live runtime metrics snapshots to this JSON file for automation.",
         resolve_path=True,
         path_type=Path,
+        rich_help_panel=PANEL_OPENRTC,
+    ),
+]
+
+MetricsJsonlArg = Annotated[
+    Path | None,
+    typer.Option(
+        "--metrics-jsonl",
+        help=(
+            "Append versioned metrics snapshots as JSON Lines for ``openrtc tui --watch`` "
+            "(truncates the file when the worker starts)."
+        ),
+        resolve_path=True,
+        path_type=Path,
+        rich_help_panel=PANEL_OPENRTC,
+    ),
+]
+
+MetricsJsonlIntervalArg = Annotated[
+    float | None,
+    typer.Option(
+        "--metrics-jsonl-interval",
+        min=0.25,
+        help=(
+            "Seconds between JSONL records (default: same as --dashboard-refresh)."
+        ),
         rich_help_panel=PANEL_OPENRTC,
     ),
 ]
@@ -810,6 +910,8 @@ def start_command(
     dashboard: DashboardArg = False,
     dashboard_refresh: DashboardRefreshArg = 1.0,
     metrics_json_file: MetricsJsonFileArg = None,
+    metrics_jsonl: MetricsJsonlArg = None,
+    metrics_jsonl_interval: MetricsJsonlIntervalArg = None,
 ) -> None:
     """Run the worker (same role as [code]python agent.py start[/code] with LiveKit)."""
     _delegate_discovered_pool_to_livekit(
@@ -822,6 +924,8 @@ def start_command(
         dashboard=dashboard,
         dashboard_refresh=dashboard_refresh,
         metrics_json_file=metrics_json_file,
+        metrics_jsonl=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
         url=url,
         api_key=api_key,
         api_secret=api_secret,
@@ -843,6 +947,8 @@ def dev_command(
     dashboard: DashboardArg = False,
     dashboard_refresh: DashboardRefreshArg = 1.0,
     metrics_json_file: MetricsJsonFileArg = None,
+    metrics_jsonl: MetricsJsonlArg = None,
+    metrics_jsonl_interval: MetricsJsonlIntervalArg = None,
 ) -> None:
     """Development worker with reload (same role as [code]python agent.py dev[/code])."""
     _delegate_discovered_pool_to_livekit(
@@ -855,6 +961,8 @@ def dev_command(
         dashboard=dashboard,
         dashboard_refresh=dashboard_refresh,
         metrics_json_file=metrics_json_file,
+        metrics_jsonl=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
         url=url,
         api_key=api_key,
         api_secret=api_secret,
@@ -876,6 +984,8 @@ def console_command(
     dashboard: DashboardArg = False,
     dashboard_refresh: DashboardRefreshArg = 1.0,
     metrics_json_file: MetricsJsonFileArg = None,
+    metrics_jsonl: MetricsJsonlArg = None,
+    metrics_jsonl_interval: MetricsJsonlIntervalArg = None,
 ) -> None:
     """Local console session (same role as [code]python agent.py console[/code])."""
     _delegate_discovered_pool_to_livekit(
@@ -888,6 +998,8 @@ def console_command(
         dashboard=dashboard,
         dashboard_refresh=dashboard_refresh,
         metrics_json_file=metrics_json_file,
+        metrics_jsonl=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
         url=url,
         api_key=api_key,
         api_secret=api_secret,
@@ -911,6 +1023,8 @@ def connect_command(
     dashboard: DashboardArg = False,
     dashboard_refresh: DashboardRefreshArg = 1.0,
     metrics_json_file: MetricsJsonFileArg = None,
+    metrics_jsonl: MetricsJsonlArg = None,
+    metrics_jsonl_interval: MetricsJsonlIntervalArg = None,
 ) -> None:
     """Connect the worker to an existing room (LiveKit [code]connect[/code])."""
     _run_connect_handoff(
@@ -928,6 +1042,8 @@ def connect_command(
         dashboard=dashboard,
         dashboard_refresh=dashboard_refresh,
         metrics_json_file=metrics_json_file,
+        metrics_jsonl=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
     )
 
 
@@ -954,6 +1070,8 @@ def download_files_command(
         dashboard=False,
         dashboard_refresh=1.0,
         metrics_json_file=None,
+        metrics_jsonl=None,
+        metrics_jsonl_interval=None,
         url=url,
         api_key=api_key,
         api_secret=api_secret,
@@ -967,12 +1085,16 @@ def _run_pool_with_reporting(
     dashboard: bool,
     dashboard_refresh: float,
     metrics_json_file: Path | None,
+    metrics_jsonl: Path | None = None,
+    metrics_jsonl_interval: float | None = None,
 ) -> None:
     reporter = RuntimeReporter(
         pool,
         dashboard=dashboard,
         refresh_seconds=dashboard_refresh,
         json_output_path=metrics_json_file,
+        metrics_jsonl_path=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
     )
     reporter.start()
     try:
