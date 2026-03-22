@@ -7,6 +7,8 @@ from typing import Annotated
 
 import typer
 
+from openrtc.metrics_stream import DEFAULT_METRICS_JSONL_FILENAME
+
 PANEL_OPENRTC = "OpenRTC"
 PANEL_LIVEKIT = "Connection"
 PANEL_ADVANCED = "Advanced"
@@ -106,8 +108,9 @@ MetricsJsonlArg = Annotated[
     typer.Option(
         "--metrics-jsonl",
         help=(
-            "Append JSON Lines for ``openrtc tui --watch`` (off by default; "
-            "truncates when the worker starts)."
+            "Append JSON Lines for the sidecar TUI (off by default; truncates when "
+            "the worker starts). For the default ``openrtc tui`` file, use "
+            f"``./{DEFAULT_METRICS_JSONL_FILENAME}`` here."
         ),
         resolve_path=True,
         path_type=Path,
@@ -129,9 +132,11 @@ TuiWatchPathArg = Annotated[
     Path,
     typer.Option(
         "--watch",
+        show_default=True,
         help=(
-            "JSONL file the worker writes with --metrics-jsonl (a file path such as "
-            "./metrics.jsonl, not your --agents-dir)."
+            "JSONL file the worker writes with --metrics-jsonl (not your "
+            f"--agents-dir). Defaults to ./{DEFAULT_METRICS_JSONL_FILENAME}; pass "
+            "the same path to --metrics-jsonl on the worker."
         ),
         resolve_path=True,
         path_type=Path,

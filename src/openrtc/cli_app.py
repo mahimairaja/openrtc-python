@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -48,6 +49,7 @@ from openrtc.cli_types import (
     TuiFromStartArg,
     TuiWatchPathArg,
 )
+from openrtc.metrics_stream import DEFAULT_METRICS_JSONL_FILENAME
 from openrtc.pool import AgentPool
 
 logger = logging.getLogger("openrtc")
@@ -273,10 +275,14 @@ def download_files_command(
 
 @app.command("tui")
 def tui_command(
-    watch: TuiWatchPathArg,
+    watch: TuiWatchPathArg = Path(DEFAULT_METRICS_JSONL_FILENAME),
     from_start: TuiFromStartArg = False,
 ) -> None:
-    """Sidecar Textual UI for a --metrics-jsonl stream (requires the ``tui`` extra)."""
+    """Sidecar Textual UI tailing JSONL metrics (requires the ``tui`` extra).
+
+    With no ``--watch``, tails ``./openrtc-metrics.jsonl`` in the current directory;
+    start the worker with ``--metrics-jsonl`` set to that same path.
+    """
     try:
         from openrtc.tui_app import run_metrics_tui
     except ImportError as exc:

@@ -1,7 +1,8 @@
 """Sidecar metrics stream for workers (JSON Lines over a file or socket).
 
 Each line is one JSON object (envelope) so a separate TUI or script can tail the
-file. This is the contract for ``openrtc tui --watch``.
+file. This is the contract for ``openrtc tui`` (default ``--watch``) and
+``openrtc tui --watch <path>``.
 
 **Envelope (schema version 1)**
 
@@ -28,6 +29,10 @@ from openrtc.resources import PoolRuntimeSnapshot
 METRICS_STREAM_SCHEMA_VERSION = 1
 KIND_SNAPSHOT = "snapshot"
 KIND_EVENT = "event"
+
+# Default tail target for ``openrtc tui`` with no ``--watch``. Use the same path
+# on the worker (``--metrics-jsonl ./openrtc-metrics.jsonl``) for a two-terminal flow.
+DEFAULT_METRICS_JSONL_FILENAME = "openrtc-metrics.jsonl"
 
 
 def snapshot_envelope(*, seq: int, snapshot: PoolRuntimeSnapshot) -> dict[str, Any]:

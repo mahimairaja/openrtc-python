@@ -45,7 +45,8 @@ class MetricsTuiApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Static(
-            "Waiting for JSONL metrics (run the worker with --metrics-jsonl)…",
+            f"Waiting for JSONL metrics at {self._path} (run the worker with "
+            "--metrics-jsonl set to this path)…",
             id="status",
         )
         yield Static("", id="event")

@@ -614,6 +614,35 @@ def test_tui_command_exits_when_textual_is_not_importable(
     assert "openrtc[tui]" in caplog.text
 
 
+def test_tui_help_documents_default_watch_path() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["tui", "--help"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert "openrtc-metrics.jsonl" in result.output
+
+
+def test_tui_command_without_watch_uses_default_metrics_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("textual")
+    import openrtc.tui_app as tu
+    from openrtc.tui_app import MetricsTuiApp
+
+    seen: list[Path] = []
+
+    def fake_run(self: MetricsTuiApp) -> None:
+        seen.append(self._path)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tu.MetricsTuiApp, "run", fake_run)
+    runner = CliRunner()
+    result = runner.invoke(app, ["tui"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert len(seen) == 1
+    assert seen[0] == (tmp_path / "openrtc-metrics.jsonl").resolve()
+
+
 def test_tui_command_rejects_watch_path_that_is_directory(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
