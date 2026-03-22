@@ -58,8 +58,9 @@ logger = logging.getLogger("openrtc")
 _QUICKSTART_EPILOG = (
     "[bold]Typical usage[/bold]: set [code]LIVEKIT_URL[/code], [code]LIVEKIT_API_KEY[/code], "
     "and [code]LIVEKIT_API_SECRET[/code], then run "
-    "[code]openrtc dev ./agents[/code] or [code]openrtc dev --agents-dir PATH[/code] "
-    "(or [code]start[/code] in production). "
+    "[code]openrtc dev ./agents[/code] (agents dir only) or add a second path for "
+    "[code]--metrics-jsonl[/code]; or use [code]--agents-dir[/code]. "
+    "[code]start[/code] for production. "
     "Defaults are conservative (e.g. no dashboard, 1s refresh); tuning flags are under "
     "the [bold]Advanced[/bold] group in each command's [code]--help[/code]."
 )
@@ -145,18 +146,28 @@ def list_command(
         print_resource_summary_rich(discovered)
 
 
+_WORKER_POSITIONAL_HELP = (
+    " Use [code]openrtc {name} ./agents[/code] or [code]--agents-dir ./agents[/code]; "
+    "add a second path only when you want JSONL metrics "
+    f"([code]--metrics-jsonl[/code], e.g. [code]./{DEFAULT_METRICS_JSONL_FILENAME}[/code] for "
+    "[code]openrtc tui[/code])."
+)
+
 _STANDARD_LIVEKIT_WORKER_SPECS: tuple[tuple[str, str], ...] = (
     (
         "start",
-        "Run the worker (same role as [code]python agent.py start[/code] with LiveKit).",
+        "Run the worker (same role as [code]python agent.py start[/code] with LiveKit)."
+        + _WORKER_POSITIONAL_HELP.format(name="start"),
     ),
     (
         "dev",
-        "Development worker with reload (same role as [code]python agent.py dev[/code]).",
+        "Development worker with reload (same role as [code]python agent.py dev[/code])."
+        + _WORKER_POSITIONAL_HELP.format(name="dev"),
     ),
     (
         "console",
-        "Local console session (same role as [code]python agent.py console[/code]).",
+        "Local console session (same role as [code]python agent.py console[/code])."
+        + _WORKER_POSITIONAL_HELP.format(name="console"),
     ),
 )
 

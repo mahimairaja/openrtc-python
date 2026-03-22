@@ -43,8 +43,10 @@ with `1`.
 
 2. Run a worker subcommand with an agents directory (plus any provider defaults
    your agents need). You can pass **`--agents-dir`** or use the **first
-   positional argument** on ``start`` / ``dev`` / ``console``; a **second**
-   positional sets ``--metrics-jsonl`` (unless you already passed that flag):
+   positional argument** on ``start`` / ``dev`` / ``console``. A **second**
+   positional is **optional** and only sets ``--metrics-jsonl`` when you want JSONL
+   metrics (e.g. for ``openrtc tui``); skip it if you only need the agents
+   directory (unless you already passed ``--metrics-jsonl``).
 
    ```bash
    openrtc dev ./agents

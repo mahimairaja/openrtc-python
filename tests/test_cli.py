@@ -291,6 +291,11 @@ def test_inject_cli_positional_paths_rewrites_shortcuts() -> None:
     assert inject_cli_positional_paths(
         ["dev", "./agents", "--reload"],
     ) == ["dev", "--agents-dir", "./agents", "--reload"]
+    assert inject_cli_positional_paths(["dev", "./agents"]) == [
+        "dev",
+        "--agents-dir",
+        "./agents",
+    ]
     assert inject_cli_positional_paths(
         ["dev", "--agents-dir", "./agents", "--reload"],
     ) == ["dev", "--agents-dir", "./agents", "--reload"]

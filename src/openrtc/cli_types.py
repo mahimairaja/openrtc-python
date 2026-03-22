@@ -18,8 +18,10 @@ AgentsDirArg = Annotated[
     typer.Option(
         "--agents-dir",
         help=(
-            "Directory of agent modules to load. On start/dev/console you may pass "
-            "the same path as the first argument instead (e.g. openrtc dev ./agents)."
+            "Directory of agent modules to load. Pass the same path as the first "
+            "positional argument instead of this flag where supported (e.g. "
+            "openrtc list ./agents or openrtc dev ./agents). On start/dev/console "
+            "only, an optional second positional sets --metrics-jsonl."
         ),
         exists=False,
         resolve_path=True,
@@ -113,7 +115,9 @@ MetricsJsonlArg = Annotated[
         help=(
             "Append JSON Lines for the sidecar TUI (off by default; truncates when "
             "the worker starts). For the default ``openrtc tui`` file, use "
-            f"``./{DEFAULT_METRICS_JSONL_FILENAME}`` here."
+            f"``./{DEFAULT_METRICS_JSONL_FILENAME}`` here. On ``start``/``dev``/``console`` "
+            "you may pass that path as the **second** positional after the agents directory "
+            "(optional—omit it if you only need to point at the agents folder)."
         ),
         resolve_path=True,
         path_type=Path,
