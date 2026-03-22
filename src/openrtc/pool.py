@@ -18,6 +18,7 @@ from typing import Any, TypeVar
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, cli
 
+from openrtc.provider_types import ProviderValue
 from openrtc.resources import (
     MetricsStreamEvent,
     PoolRuntimeSnapshot,
@@ -130,9 +131,9 @@ class AgentConfig:
 
     name: str
     agent_cls: type[Agent]
-    stt: Any = None
-    llm: Any = None
-    tts: Any = None
+    stt: ProviderValue | None = None
+    llm: ProviderValue | None = None
+    tts: ProviderValue | None = None
     greeting: str | None = None
     session_kwargs: dict[str, Any] = field(default_factory=dict)
     source_path: Path | None = None
@@ -185,18 +186,18 @@ class AgentDiscoveryConfig:
     """
 
     name: str | None = None
-    stt: Any = None
-    llm: Any = None
-    tts: Any = None
+    stt: ProviderValue | None = None
+    llm: ProviderValue | None = None
+    tts: ProviderValue | None = None
     greeting: str | None = None
 
 
 def agent_config(
     *,
     name: str | None = None,
-    stt: Any = None,
-    llm: Any = None,
-    tts: Any = None,
+    stt: ProviderValue | None = None,
+    llm: ProviderValue | None = None,
+    tts: ProviderValue | None = None,
     greeting: str | None = None,
 ) -> Callable[[_AgentType], _AgentType]:
     """Attach OpenRTC discovery metadata to a standard LiveKit ``Agent`` class.
@@ -238,9 +239,9 @@ class AgentPool:
     def __init__(
         self,
         *,
-        default_stt: Any = None,
-        default_llm: Any = None,
-        default_tts: Any = None,
+        default_stt: ProviderValue | None = None,
+        default_llm: ProviderValue | None = None,
+        default_tts: ProviderValue | None = None,
         default_greeting: str | None = None,
     ) -> None:
         """Create a pool with shared defaults, prewarm, and a universal entrypoint.
@@ -283,9 +284,9 @@ class AgentPool:
         name: str,
         agent_cls: type[Agent],
         *,
-        stt: Any = None,
-        llm: Any = None,
-        tts: Any = None,
+        stt: ProviderValue | None = None,
+        llm: ProviderValue | None = None,
+        tts: ProviderValue | None = None,
         greeting: str | None = None,
         session_kwargs: Mapping[str, Any] | None = None,
         source_path: Path | str | None = None,
@@ -473,7 +474,11 @@ class AgentPool:
         """Create and start a LiveKit ``AgentSession`` for the resolved agent."""
         await _run_universal_session(self._runtime_state, ctx)
 
-    def _resolve_provider(self, value: Any, default_value: Any) -> Any:
+    def _resolve_provider(
+        self,
+        value: ProviderValue | None,
+        default_value: ProviderValue | None,
+    ) -> ProviderValue | None:
         return default_value if value is None else value
 
     def _resolve_greeting(self, greeting: str | None) -> str | None:

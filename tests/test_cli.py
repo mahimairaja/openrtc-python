@@ -16,6 +16,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from openrtc.cli import app, main
+from openrtc.provider_types import ProviderValue
 from openrtc.resources import (
     MetricsStreamEvent,
     PoolRuntimeSnapshot,
@@ -36,9 +37,9 @@ def _normalize_cli_output_for_assert(text: str) -> str:
 class StubConfig:
     name: str
     agent_cls: type[Any]
-    stt: Any = None
-    llm: Any = None
-    tts: Any = None
+    stt: ProviderValue | None = None
+    llm: ProviderValue | None = None
+    tts: ProviderValue | None = None
     greeting: str | None = None
 
 
@@ -50,9 +51,9 @@ class StubPool:
     def __init__(
         self,
         *,
-        default_stt: Any = None,
-        default_llm: Any = None,
-        default_tts: Any = None,
+        default_stt: ProviderValue | None = None,
+        default_llm: ProviderValue | None = None,
+        default_tts: ProviderValue | None = None,
         default_greeting: str | None = None,
         discovered: list[StubConfig],
     ) -> None:

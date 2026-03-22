@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from openrtc.provider_types import ProviderValue
+
 
 def agent_provider_kwargs(
-    default_stt: str | None,
-    default_llm: str | None,
-    default_tts: str | None,
+    default_stt: ProviderValue | None,
+    default_llm: ProviderValue | None,
+    default_tts: ProviderValue | None,
     default_greeting: str | None,
 ) -> dict[str, Any]:
     """Keyword arguments for :class:`openrtc.pool.AgentPool` provider defaults."""
@@ -31,9 +33,9 @@ class SharedLiveKitWorkerOptions:
     """
 
     agents_dir: Path
-    default_stt: str | None
-    default_llm: str | None
-    default_tts: str | None
+    default_stt: ProviderValue | None
+    default_llm: ProviderValue | None
+    default_tts: ProviderValue | None
     default_greeting: str | None
     url: str | None
     api_key: str | None
@@ -58,9 +60,9 @@ class SharedLiveKitWorkerOptions:
         cls,
         agents_dir: Path,
         *,
-        default_stt: str | None = None,
-        default_llm: str | None = None,
-        default_tts: str | None = None,
+        default_stt: ProviderValue | None = None,
+        default_llm: ProviderValue | None = None,
+        default_tts: ProviderValue | None = None,
         default_greeting: str | None = None,
         url: str | None = None,
         api_key: str | None = None,
