@@ -124,6 +124,30 @@ class RuntimeReporter:
         )
         next_jsonl = now + self._jsonl_interval if self._jsonl_sink else float("inf")
 
+        def schedule_cycle(live: Live | None) -> bool:
+            """Wait until the next tick; run JSON/JSONL/dashboard work. Return False to exit."""
+            nonlocal next_periodic, next_jsonl
+            n = time.monotonic()
+            wait_periodic = max(0.0, next_periodic - n)
+            wait_jsonl = (
+                max(0.0, next_jsonl - n)
+                if self._jsonl_sink is not None
+                else float("inf")
+            )
+            timeout = min(wait_periodic, wait_jsonl, 3600.0)
+            if self._stop_event.wait(timeout):
+                return False
+            n = time.monotonic()
+            if self._needs_periodic_file_or_ui and n >= next_periodic:
+                if live is not None:
+                    live.update(self._build_dashboard_renderable())
+                self._write_json_snapshot()
+                next_periodic += self._refresh_seconds
+            if self._jsonl_sink is not None and n >= next_jsonl:
+                self._emit_jsonl()
+                next_jsonl += self._jsonl_interval
+            return True
+
         if self._dashboard:
             with Live(
                 self._build_dashboard_renderable(),
@@ -131,46 +155,13 @@ class RuntimeReporter:
                 refresh_per_second=max(int(round(1 / self._refresh_seconds)), 1),
                 transient=True,
             ) as live:
-                while True:
-                    now = time.monotonic()
-                    wait_periodic = max(0.0, next_periodic - now)
-                    wait_jsonl = (
-                        max(0.0, next_jsonl - now)
-                        if self._jsonl_sink is not None
-                        else float("inf")
-                    )
-                    timeout = min(wait_periodic, wait_jsonl, 3600.0)
-                    if self._stop_event.wait(timeout):
-                        break
-                    now = time.monotonic()
-                    if self._needs_periodic_file_or_ui and now >= next_periodic:
-                        live.update(self._build_dashboard_renderable())
-                        self._write_json_snapshot()
-                        next_periodic += self._refresh_seconds
-                    if self._jsonl_sink is not None and now >= next_jsonl:
-                        self._emit_jsonl()
-                        next_jsonl += self._jsonl_interval
+                while schedule_cycle(live):
+                    pass
                 live.update(self._build_dashboard_renderable())
             return
 
-        while True:
-            now = time.monotonic()
-            wait_periodic = max(0.0, next_periodic - now)
-            wait_jsonl = (
-                max(0.0, next_jsonl - now)
-                if self._jsonl_sink is not None
-                else float("inf")
-            )
-            timeout = min(wait_periodic, wait_jsonl, 3600.0)
-            if self._stop_event.wait(timeout):
-                break
-            now = time.monotonic()
-            if self._needs_periodic_file_or_ui and now >= next_periodic:
-                self._write_json_snapshot()
-                next_periodic += self._refresh_seconds
-            if self._jsonl_sink is not None and now >= next_jsonl:
-                self._emit_jsonl()
-                next_jsonl += self._jsonl_interval
+        while schedule_cycle(None):
+            pass
 
     def _build_dashboard_renderable(self) -> Panel:
         snapshot = self._pool.runtime_snapshot()
@@ -364,6 +355,10 @@ def _strip_openrtc_only_flags_for_livekit(argv_tail: list[str]) -> list[str]:
     that does not recognize OpenRTC options such as ``--agents-dir``. Those must
     be removed before the handoff while preserving any forwarded LiveKit flags
     (e.g. ``--reload``, ``--url``) when we add pass-through options later.
+
+    For flags in ``_OPENRTC_ONLY_FLAGS_WITH_VALUE``, the **next** token is always
+    consumed as the value when present, even if it starts with ``--`` (e.g. a
+    path or provider string must not be mistaken for a following flag).
     """
     out: list[str] = []
     i = 0
@@ -388,7 +383,7 @@ def _strip_openrtc_only_flags_for_livekit(argv_tail: list[str]) -> list[str]:
             continue
         if arg in _OPENRTC_ONLY_FLAGS_WITH_VALUE:
             i += 1
-            if i < len(argv_tail) and not argv_tail[i].startswith("--"):
+            if i < len(argv_tail):
                 i += 1
             continue
         out.append(arg)

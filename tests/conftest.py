@@ -78,3 +78,40 @@ except ImportError:
 
     sys.modules["livekit"] = livekit_module
     sys.modules["livekit.agents"] = agents_module
+
+
+import pytest
+
+from openrtc.resources import (
+    PoolRuntimeSnapshot,
+    ProcessResidentSetInfo,
+    SavingsEstimate,
+)
+
+
+@pytest.fixture
+def minimal_pool_runtime_snapshot() -> PoolRuntimeSnapshot:
+    """Small :class:`PoolRuntimeSnapshot` for metrics stream / TUI tests."""
+    return PoolRuntimeSnapshot(
+        timestamp=1.0,
+        uptime_seconds=0.5,
+        registered_agents=1,
+        active_sessions=0,
+        total_sessions_started=0,
+        total_session_failures=0,
+        last_routed_agent=None,
+        last_error=None,
+        sessions_by_agent={},
+        resident_set=ProcessResidentSetInfo(
+            bytes_value=1024,
+            metric="test",
+            description="test",
+        ),
+        savings_estimate=SavingsEstimate(
+            agent_count=1,
+            shared_worker_bytes=1024,
+            estimated_separate_workers_bytes=1024,
+            estimated_saved_bytes=0,
+            assumptions=(),
+        ),
+    )

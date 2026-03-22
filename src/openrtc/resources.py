@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     from openrtc.pool import AgentConfig
@@ -16,6 +16,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger("openrtc")
 
 _STREAM_EVENTS_MAXLEN = 256
+
+
+class MetricsStreamEvent(TypedDict, total=False):
+    """One drained session lifecycle row for JSONL export.
+
+    Rows always include ``event`` and ``agent`` from the store; ``session_failed``
+    rows may include ``error``.
+    """
+
+    event: str
+    agent: str
+    error: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +124,7 @@ class RuntimeMetricsStore:
     last_error: str | None = None
     sessions_by_agent: dict[str, int] = field(default_factory=dict)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
-    _stream_events: deque[dict[str, Any]] = field(
+    _stream_events: deque[MetricsStreamEvent] = field(
         default_factory=lambda: deque(maxlen=_STREAM_EVENTS_MAXLEN),
         init=False,
         repr=False,
@@ -143,10 +155,7 @@ class RuntimeMetricsStore:
             for key, value in dict(state["sessions_by_agent"]).items()
         }
         raw_events = state.get("_stream_events", [])
-        self._stream_events = deque(
-            list(raw_events),
-            maxlen=_STREAM_EVENTS_MAXLEN,
-        )
+        self._stream_events = deque(raw_events, maxlen=_STREAM_EVENTS_MAXLEN)
         self._lock = Lock()
 
     def record_session_started(self, agent_name: str) -> None:
@@ -188,7 +197,7 @@ class RuntimeMetricsStore:
                 },
             )
 
-    def drain_stream_events(self) -> list[dict[str, Any]]:
+    def drain_stream_events(self) -> list[MetricsStreamEvent]:
         """Remove and return pending stream events for JSONL export (order preserved)."""
         with self._lock:
             out = list(self._stream_events)

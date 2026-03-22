@@ -18,43 +18,40 @@ from openrtc.metrics_stream import (
     snapshot_envelope,
 )
 from openrtc.resources import (
+    MetricsStreamEvent,
     PoolRuntimeSnapshot,
-    ProcessResidentSetInfo,
-    SavingsEstimate,
 )
 
 
-def _minimal_snapshot() -> PoolRuntimeSnapshot:
-    return PoolRuntimeSnapshot(
-        timestamp=1.0,
-        uptime_seconds=0.5,
-        registered_agents=1,
-        active_sessions=0,
-        total_sessions_started=0,
-        total_session_failures=0,
-        last_routed_agent=None,
-        last_error=None,
-        sessions_by_agent={},
-        resident_set=ProcessResidentSetInfo(
-            bytes_value=1024,
-            metric="test",
-            description="test",
-        ),
-        savings_estimate=SavingsEstimate(
-            agent_count=1,
-            shared_worker_bytes=1024,
-            estimated_separate_workers_bytes=1024,
-            estimated_saved_bytes=0,
-            assumptions=(),
-        ),
+def _read_jsonl_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return [ln for ln in path.read_text(encoding="utf-8").split("\n") if ln.strip()]
+
+
+def _wait_for_jsonl_lines(
+    path: Path,
+    *,
+    min_lines: int,
+    timeout: float = 5.0,
+    poll_interval: float = 0.02,
+) -> list[str]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        lines = _read_jsonl_lines(path)
+        if len(lines) >= min_lines:
+            return lines
+        time.sleep(poll_interval)
+    raise AssertionError(
+        f"timed out after {timeout}s waiting for {min_lines} JSONL line(s) in {path!s}",
     )
 
 
 class _StubPool:
-    def __init__(self) -> None:
-        self._snap = _minimal_snapshot()
+    def __init__(self, snapshot: PoolRuntimeSnapshot) -> None:
+        self._snap = snapshot
 
-    def drain_metrics_stream_events(self) -> list[dict[str, object]]:
+    def drain_metrics_stream_events(self) -> list[MetricsStreamEvent]:
         return []
 
     def runtime_snapshot(self) -> PoolRuntimeSnapshot:
@@ -92,11 +89,13 @@ def test_parse_metrics_jsonl_line_rejects_unknown_kind() -> None:
     assert parse_metrics_jsonl_line(bad) is None
 
 
-def test_jsonl_metrics_sink_requires_open_before_write(tmp_path: Path) -> None:
+def test_jsonl_metrics_sink_requires_open_before_write(
+    tmp_path: Path,
+    minimal_pool_runtime_snapshot: PoolRuntimeSnapshot,
+) -> None:
     sink = JsonlMetricsSink(tmp_path / "unopened.jsonl")
-    snap = _minimal_snapshot()
     with pytest.raises(RuntimeError, match="open"):
-        sink.write_snapshot(snap)
+        sink.write_snapshot(minimal_pool_runtime_snapshot)
     with pytest.raises(RuntimeError, match="open"):
         sink.write_event({"event": "x"})
 
@@ -118,11 +117,14 @@ def test_parse_metrics_jsonl_line_accepts_event() -> None:
     assert rec["payload"]["agent"] == "x"
 
 
-def test_jsonl_sink_writes_snapshot_then_event(tmp_path: Path) -> None:
+def test_jsonl_sink_writes_snapshot_then_event(
+    tmp_path: Path,
+    minimal_pool_runtime_snapshot: PoolRuntimeSnapshot,
+) -> None:
     path = tmp_path / "e.jsonl"
     sink = JsonlMetricsSink(path)
     sink.open()
-    sink.write_snapshot(_minimal_snapshot())
+    sink.write_snapshot(minimal_pool_runtime_snapshot)
     sink.write_event({"event": "session_finished", "agent": "a"})
     sink.close()
     lines = path.read_text(encoding="utf-8").strip().split("\n")
@@ -142,8 +144,10 @@ def test_runtime_metrics_store_drains_stream_events() -> None:
     assert store.drain_stream_events() == []
 
 
-def test_snapshot_envelope_shape() -> None:
-    snap = _minimal_snapshot()
+def test_snapshot_envelope_shape(
+    minimal_pool_runtime_snapshot: PoolRuntimeSnapshot,
+) -> None:
+    snap = minimal_pool_runtime_snapshot
     env = snapshot_envelope(seq=7, snapshot=snap)
     assert env["schema_version"] == METRICS_STREAM_SCHEMA_VERSION
     assert env["kind"] == KIND_SNAPSHOT
@@ -152,11 +156,14 @@ def test_snapshot_envelope_shape() -> None:
     assert env["payload"] == snap.to_dict()
 
 
-def test_jsonl_sink_truncates_on_open_and_increments_seq(tmp_path: Path) -> None:
+def test_jsonl_sink_truncates_on_open_and_increments_seq(
+    tmp_path: Path,
+    minimal_pool_runtime_snapshot: PoolRuntimeSnapshot,
+) -> None:
     path = tmp_path / "stream.jsonl"
     sink = JsonlMetricsSink(path)
     sink.open()
-    snap = _minimal_snapshot()
+    snap = minimal_pool_runtime_snapshot
     sink.write_snapshot(snap)
     sink.write_snapshot(snap)
     sink.close()
@@ -168,16 +175,19 @@ def test_jsonl_sink_truncates_on_open_and_increments_seq(tmp_path: Path) -> None
     assert b["seq"] == 2
 
 
-def test_jsonl_sink_new_open_truncates_previous_file(tmp_path: Path) -> None:
+def test_jsonl_sink_new_open_truncates_previous_file(
+    tmp_path: Path,
+    minimal_pool_runtime_snapshot: PoolRuntimeSnapshot,
+) -> None:
     path = tmp_path / "stream.jsonl"
     sink1 = JsonlMetricsSink(path)
     sink1.open()
-    sink1.write_snapshot(_minimal_snapshot())
+    sink1.write_snapshot(minimal_pool_runtime_snapshot)
     sink1.close()
 
     sink2 = JsonlMetricsSink(path)
     sink2.open()
-    sink2.write_snapshot(_minimal_snapshot())
+    sink2.write_snapshot(minimal_pool_runtime_snapshot)
     sink2.close()
 
     lines = path.read_text(encoding="utf-8").strip().split("\n")
@@ -187,24 +197,26 @@ def test_jsonl_sink_new_open_truncates_previous_file(tmp_path: Path) -> None:
 
 def test_runtime_reporter_emits_snapshot_then_drained_events_in_order(
     tmp_path: Path,
+    minimal_pool_runtime_snapshot: PoolRuntimeSnapshot,
 ) -> None:
     """Each tick writes one snapshot line, then any events from the pool (order)."""
 
     class _PoolWithOneEvent:
-        def __init__(self) -> None:
+        def __init__(self, snap: PoolRuntimeSnapshot) -> None:
+            self._snap = snap
             self._sent = False
 
         def runtime_snapshot(self) -> PoolRuntimeSnapshot:
-            return _minimal_snapshot()
+            return self._snap
 
-        def drain_metrics_stream_events(self) -> list[dict[str, object]]:
+        def drain_metrics_stream_events(self) -> list[MetricsStreamEvent]:
             if self._sent:
                 return []
             self._sent = True
             return [{"event": "session_started", "agent": "demo"}]
 
     path = tmp_path / "ordered.jsonl"
-    pool = _PoolWithOneEvent()
+    pool = _PoolWithOneEvent(minimal_pool_runtime_snapshot)
     reporter = RuntimeReporter(
         pool,
         dashboard=False,
@@ -214,23 +226,25 @@ def test_runtime_reporter_emits_snapshot_then_drained_events_in_order(
         metrics_jsonl_interval=0.25,
     )
     reporter.start()
-    time.sleep(0.6)
-    reporter.stop()
+    try:
+        lines = _wait_for_jsonl_lines(path, min_lines=2, timeout=5.0)
+    finally:
+        reporter.stop()
 
-    lines = [ln for ln in path.read_text(encoding="utf-8").split("\n") if ln.strip()]
-    assert len(lines) >= 1
     first = json.loads(lines[0])
     assert first["kind"] == KIND_SNAPSHOT
     assert first["seq"] >= 1
-    if len(lines) >= 2:
-        second = json.loads(lines[1])
-        assert second["kind"] == KIND_EVENT
-        assert second["payload"]["event"] == "session_started"
+    second = json.loads(lines[1])
+    assert second["kind"] == KIND_EVENT
+    assert second["payload"]["event"] == "session_started"
 
 
-def test_runtime_reporter_emits_jsonl_periodically(tmp_path: Path) -> None:
+def test_runtime_reporter_emits_jsonl_periodically(
+    tmp_path: Path,
+    minimal_pool_runtime_snapshot: PoolRuntimeSnapshot,
+) -> None:
     path = tmp_path / "live.jsonl"
-    pool = _StubPool()
+    pool = _StubPool(minimal_pool_runtime_snapshot)
     reporter = RuntimeReporter(
         pool,
         dashboard=False,
@@ -240,11 +254,11 @@ def test_runtime_reporter_emits_jsonl_periodically(tmp_path: Path) -> None:
         metrics_jsonl_interval=0.25,
     )
     reporter.start()
-    time.sleep(0.85)
-    reporter.stop()
+    try:
+        lines = _wait_for_jsonl_lines(path, min_lines=2, timeout=5.0)
+    finally:
+        reporter.stop()
 
-    lines = [ln for ln in path.read_text(encoding="utf-8").split("\n") if ln.strip()]
-    assert len(lines) >= 2
     first = json.loads(lines[0])
     last = json.loads(lines[-1])
     assert first["schema_version"] == METRICS_STREAM_SCHEMA_VERSION

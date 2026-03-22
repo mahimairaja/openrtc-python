@@ -7,39 +7,9 @@ import json
 import pytest
 
 from openrtc.metrics_stream import snapshot_envelope
-from openrtc.resources import (
-    PoolRuntimeSnapshot,
-    ProcessResidentSetInfo,
-    SavingsEstimate,
-)
+from openrtc.resources import PoolRuntimeSnapshot
 
 pytest.importorskip("textual")
-
-
-def _minimal_snapshot() -> PoolRuntimeSnapshot:
-    return PoolRuntimeSnapshot(
-        timestamp=1.0,
-        uptime_seconds=0.5,
-        registered_agents=1,
-        active_sessions=0,
-        total_sessions_started=0,
-        total_session_failures=0,
-        last_routed_agent=None,
-        last_error=None,
-        sessions_by_agent={},
-        resident_set=ProcessResidentSetInfo(
-            bytes_value=1024,
-            metric="test",
-            description="test",
-        ),
-        savings_estimate=SavingsEstimate(
-            agent_count=1,
-            shared_worker_bytes=1024,
-            estimated_separate_workers_bytes=1024,
-            estimated_saved_bytes=0,
-            assumptions=(),
-        ),
-    )
 
 
 @pytest.mark.asyncio
@@ -66,11 +36,14 @@ async def test_metrics_tui_displays_event_line(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_metrics_tui_skips_malformed_line_then_parses_valid(tmp_path) -> None:
+async def test_metrics_tui_skips_malformed_line_then_parses_valid(
+    tmp_path,
+    minimal_pool_runtime_snapshot: PoolRuntimeSnapshot,
+) -> None:
     from openrtc.tui_app import MetricsTuiApp
 
     path = tmp_path / "mix.jsonl"
-    snap = _minimal_snapshot()
+    snap = minimal_pool_runtime_snapshot
     good = json.dumps(snapshot_envelope(seq=1, snapshot=snap), sort_keys=True)
     path.write_text("not-valid-json\n" + good + "\n", encoding="utf-8")
 
@@ -83,11 +56,14 @@ async def test_metrics_tui_skips_malformed_line_then_parses_valid(tmp_path) -> N
 
 
 @pytest.mark.asyncio
-async def test_metrics_tui_displays_snapshot_line(tmp_path) -> None:
+async def test_metrics_tui_displays_snapshot_line(
+    tmp_path,
+    minimal_pool_runtime_snapshot: PoolRuntimeSnapshot,
+) -> None:
     from openrtc.tui_app import MetricsTuiApp
 
     path = tmp_path / "stream.jsonl"
-    snap = _minimal_snapshot()
+    snap = minimal_pool_runtime_snapshot
     line = json.dumps(snapshot_envelope(seq=1, snapshot=snap), sort_keys=True)
     path.write_text(line + "\n", encoding="utf-8")
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, Static
@@ -21,7 +21,7 @@ class MetricsTuiApp(App[None]):
         super().__init__()
         self._path = watch_path.resolve()
         self._from_start = from_start
-        self._fh: Any = None
+        self._fh: TextIO | None = None
         self._buf = ""
         self._latest: dict[str, Any] | None = None
         self._last_event: dict[str, Any] | None = None
@@ -89,9 +89,15 @@ class MetricsTuiApp(App[None]):
             return
         seq = self._latest.get("seq")
         wall = self._latest.get("wall_time_unix")
+        wall_s = "n/a"
+        if wall is not None:
+            try:
+                wall_s = f"{float(wall):.3f}"
+            except (TypeError, ValueError):
+                wall_s = "n/a"
         status = self.query_one("#status", Static)
         status.update(
-            f"seq={seq}  wall={float(wall):.3f}  registered={payload.get('registered_agents')} "
+            f"seq={seq}  wall={wall_s}  registered={payload.get('registered_agents')} "
             f"active={payload.get('active_sessions')}  "
             f"uptime={float(payload.get('uptime_seconds', 0)):.1f}s"
         )

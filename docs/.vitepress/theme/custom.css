@@ -2,7 +2,7 @@
  * OpenRTC docs theme — aligned with brand assets (cyan / deep blue, modern sans).
  */
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,500..700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,500..700&family=JetBrains+Mono:wght@400;500&display=swap';
 
 :root {
   --ort-font-sans: 'DM Sans', ui-sans-serif, system-ui, sans-serif,

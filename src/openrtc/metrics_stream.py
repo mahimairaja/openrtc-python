@@ -78,7 +78,11 @@ class JsonlMetricsSink:
         self._lock = Lock()
 
     def open(self) -> None:
-        """Create parent dirs, truncate file, open for append."""
+        """Create parent dirs and open the JSONL file for writing.
+
+        Uses ``self._path.open("w", ...)``, which **truncates** any existing file.
+        That is intentional: each worker run starts a fresh stream (see class doc).
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self._path.open("w", encoding="utf-8")
 

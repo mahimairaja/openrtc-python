@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from openrtc.cli import app, main
 from openrtc.resources import (
+    MetricsStreamEvent,
     PoolRuntimeSnapshot,
     ProcessResidentSetInfo,
     SavingsEstimate,
@@ -70,7 +71,7 @@ class StubPool:
     def run(self) -> None:
         self.run_called = True
 
-    def drain_metrics_stream_events(self) -> list[dict[str, Any]]:
+    def drain_metrics_stream_events(self) -> list[MetricsStreamEvent]:
         return []
 
     def runtime_snapshot(self) -> PoolRuntimeSnapshot:
@@ -309,6 +310,9 @@ def test_strip_openrtc_only_flags_for_livekit_removes_openrtc_options() -> None:
         "--reload"
     ]
     assert _strip_openrtc_only_flags_for_livekit([]) == []
+    assert _strip_openrtc_only_flags_for_livekit(
+        ["--metrics-json-file", "--not-a-flag", "--reload"],
+    ) == ["--reload"]
 
 
 def test_cli_entrypoint_documents_optional_extra() -> None:
