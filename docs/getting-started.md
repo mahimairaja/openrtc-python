@@ -14,15 +14,21 @@ pip install openrtc
 The base package includes the LiveKit Silero and turn-detector plugins used by
 OpenRTC's shared prewarm path.
 
-Install the **Typer/Rich CLI** (`openrtc list`, `openrtc start`, `openrtc dev`)
-with:
+Install the **Typer/Rich CLI** (`openrtc list`, `openrtc start`, `openrtc dev`,
+`openrtc console`, …) with:
 
 ```bash
 pip install 'openrtc[cli]'
 ```
 
-See [CLI](./cli) for output modes (`--plain`, `--json`, `--resources`) and
-optional-dependency behavior.
+Install the optional **Textual sidecar** for `openrtc tui --watch` with:
+
+```bash
+pip install 'openrtc[cli,tui]'
+```
+
+See [CLI](./cli) for subcommands, output modes (`--plain`, `--json`, `--resources`),
+the JSONL metrics stream (`--metrics-jsonl`), and optional-dependency behavior.
 
 If you are contributing locally, install the package in editable mode:
 
@@ -31,7 +37,19 @@ python -m pip install -e .
 ```
 
 Contributor environments typically use `uv sync --group dev`, which includes
-Typer and Rich so the CLI runs without passing `--extra cli`.
+Typer, Rich, and Textual so `openrtc` and `openrtc tui` run without extra flags.
+
+## CLI quick path
+
+With `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` set, the minimal
+worker invocation is:
+
+```bash
+openrtc dev --agents-dir ./agents
+```
+
+Use `openrtc start` for production-style runs. See [CLI](./cli) for `console`,
+`connect`, `download-files`, metrics files, and the sidecar TUI.
 
 ## Quick start
 

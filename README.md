@@ -101,10 +101,17 @@ pip install openrtc
 The base package pulls in `livekit-agents[openai,silero,turn-detector]`, so the
 runtime plugins required by shared prewarm are installed without extra flags.
 
-Install the Typer/Rich CLI (`openrtc list`, `openrtc start`, `openrtc dev`) with:
+Install the Typer/Rich CLI (`openrtc list`, `openrtc start`, `openrtc dev`, …)
+with:
 
 ```bash
 pip install 'openrtc[cli]'
+```
+
+Install the optional **Textual sidecar TUI** (`openrtc tui --watch`) with:
+
+```bash
+pip install 'openrtc[cli,tui]'
 ```
 
 If you are developing locally, the repository uses `uv` for environment and
@@ -274,7 +281,26 @@ deployments.
 
 ## CLI usage
 
-OpenRTC includes a CLI for discovery-based workflows.
+OpenRTC includes a CLI for discovery-based workflows. Subcommands mirror the
+LiveKit Agents CLI (`dev`, `start`, `console`, `connect`, `download-files`, as
+in `python agent.py <command>`), plus `list` and `tui`.
+
+**Typical path:** set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET`,
+then run the worker with only `--agents-dir` (plus any `--default-*` strings
+your agents need).
+
+```bash
+export LIVEKIT_URL=ws://localhost:7880
+export LIVEKIT_API_KEY=devkey
+export LIVEKIT_API_SECRET=secret
+
+openrtc dev --agents-dir ./agents
+# or
+openrtc start --agents-dir ./agents
+```
+
+Defaults are conservative (no dashboard, 1s refresh where applicable). Tuning
+flags are grouped under **Advanced** in each command’s `--help`.
 
 ### List discovered agents
 
@@ -299,35 +325,34 @@ Stable output for scripts and CI:
   current **VmRSS**; on **macOS** it is **peak** `ru_maxrss` (bytes), not
   instantaneous live RSS—compare runs only on the same OS.
 
-### Run in production mode
+### Run workers (production and development)
 
 ```bash
 openrtc start --agents-dir ./agents
-openrtc start --agents-dir ./agents --dashboard
-```
-
-### Run in development mode
-
-```bash
 openrtc dev --agents-dir ./agents
-openrtc dev --agents-dir ./examples/agents --dashboard --metrics-json-file ./runtime.json
 ```
 
-Both `start` and `dev` discover agents first and then hand off to the underlying
-LiveKit worker runtime.
+Optional runtime visibility:
 
-The optional runtime dashboard shows:
+- **`--dashboard`** — Rich summary (worker RSS, sessions, routing, savings
+  estimate). Off by default.
+- **`--metrics-json-file ./runtime.json`** — Overwrites a JSON file each tick with
+  the latest snapshot (automation / CI). See **Advanced** in `--help`.
+- **`--metrics-jsonl ./openrtc-metrics.jsonl`** — Append **JSON Lines** (truncates
+  when the worker starts): versioned `snapshot` rows plus optional `event`
+  rows for session lifecycle. Use with a second terminal:
 
-- current worker RSS
-- active sessions and total handled sessions
-- per-agent load
-- the last routed agent and latest failure
-- an estimated memory-savings comparison between one shared worker and one
-  worker per registered agent
+  ```bash
+  pip install 'openrtc[cli,tui]'
+  openrtc tui --watch ./openrtc-metrics.jsonl
+  ```
 
-For automation, `--metrics-json-file` writes the same runtime snapshot as JSON
-while the worker is running. See [docs/cli.md](docs/cli.md) for a step-by-step
-"prove the value" workflow.
+Other worker subcommands match LiveKit: `openrtc console`, `openrtc connect
+--room …`, and `openrtc download-files` (minimal options: agents dir + connection
+only). See [docs/cli.md](docs/cli.md) for full detail.
+
+Worker commands discover agents first, then delegate to the LiveKit CLI;
+OpenRTC-only flags are not forwarded to LiveKit’s parser.
 
 ## Public API at a glance
 
@@ -347,6 +372,8 @@ On `AgentPool`, the primary public methods and properties are:
 - `remove(name)`
 - `run()`
 - `runtime_snapshot()`
+- `drain_metrics_stream_events()` — drain queued session lifecycle events for JSONL
+  export (used by the CLI; rarely needed in application code)
 - `server`
 
 ## Project structure
@@ -355,11 +382,16 @@ On `AgentPool`, the primary public methods and properties are:
 src/openrtc/
 ├── __init__.py
 ├── cli.py
+├── cli_app.py
+├── metrics_stream.py
+├── tui_app.py
 └── pool.py
 ```
 
 - `pool.py` contains the core `AgentPool` implementation and discovery helpers
-- `cli.py` provides discovery and worker startup commands
+- `cli.py` / `cli_app.py` provide the Typer/Rich CLI (`openrtc[cli]`)
+- `metrics_stream.py` defines the JSONL metrics stream format
+- `tui_app.py` implements the optional Textual sidecar (`openrtc[tui]`)
 - `__init__.py` exposes the public package API
 
 ## Contributing

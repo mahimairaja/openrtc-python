@@ -111,11 +111,19 @@ exactly one `Agent` subclass at module scope, and the filename doesn't start
 with `_`. Fix and re-run `openrtc list` until all agents appear.
 
 ```bash
-# Development mode (auto-reload)
+# Development mode (auto-reload) — set LIVEKIT_* env vars first
 openrtc dev --agents-dir ./agents
 
 # Production mode
 openrtc start --agents-dir ./agents
+
+# Same LiveKit subcommands as python agent.py: console, connect, download-files
+# openrtc console --agents-dir ./agents
+# openrtc connect --agents-dir ./agents --room my-room
+
+# Optional: JSON Lines metrics + sidecar TUI (pip install 'openrtc[cli,tui]')
+# openrtc dev --agents-dir ./agents --metrics-jsonl ./metrics.jsonl
+# openrtc tui --watch ./metrics.jsonl
 
 # Or run the entrypoint directly
 python main.py dev
@@ -144,6 +152,10 @@ Unknown metadata names raise `ValueError` — no silent fallback.
 - **`pool.run()` delegates to `livekit.agents.cli.run_app()`.** The first CLI
   argument must be `dev` or `start` (e.g. `python main.py dev`). Without it,
   the process exits immediately with a usage error.
+- **`openrtc dev|start|…` sets up discovery then calls the same LiveKit CLI.**
+  OpenRTC-only flags (`--agents-dir`, `--dashboard`, `--metrics-jsonl`, …) are
+  stripped from `sys.argv` before LiveKit parses arguments—do not expect LiveKit
+  to understand them.
 - **Provider objects must be pickleable.** OpenRTC has built-in serialization
   for `livekit.plugins.openai` STT, TTS, and LLM. Other providers: use string
   identifiers or ensure the object is natively pickleable.
