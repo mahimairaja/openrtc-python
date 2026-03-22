@@ -60,6 +60,9 @@ class StubPool:
     def run(self) -> None:
         self.run_called = True
 
+    def drain_metrics_stream_events(self) -> list[dict[str, Any]]:
+        return []
+
     def runtime_snapshot(self) -> PoolRuntimeSnapshot:
         self.runtime_snapshot_calls += 1
         return PoolRuntimeSnapshot(

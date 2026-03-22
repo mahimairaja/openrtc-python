@@ -8,7 +8,7 @@ from typing import Any
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, Static
 
-from openrtc.metrics_stream import parse_metrics_jsonl_line
+from openrtc.metrics_stream import KIND_EVENT, KIND_SNAPSHOT, parse_metrics_jsonl_line
 
 
 class MetricsTuiApp(App[None]):
@@ -24,6 +24,7 @@ class MetricsTuiApp(App[None]):
         self._fh: Any = None
         self._buf = ""
         self._latest: dict[str, Any] | None = None
+        self._last_event: dict[str, Any] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -31,6 +32,7 @@ class MetricsTuiApp(App[None]):
             "Waiting for JSONL metrics (run the worker with --metrics-jsonl)…",
             id="status",
         )
+        yield Static("", id="event")
         yield Static("", id="agents")
         yield Static("", id="detail")
         yield Footer()
@@ -59,9 +61,25 @@ class MetricsTuiApp(App[None]):
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
             rec = parse_metrics_jsonl_line(line)
-            if rec is not None:
+            if rec is None:
+                continue
+            if rec.get("kind") == KIND_SNAPSHOT:
                 self._latest = rec
                 self._refresh_view()
+            elif rec.get("kind") == KIND_EVENT:
+                pl = rec.get("payload")
+                if isinstance(pl, dict):
+                    self._last_event = pl
+                    self._refresh_event_line()
+
+    def _refresh_event_line(self) -> None:
+        if self._last_event is None:
+            return
+        ev = self.query_one("#event", Static)
+        ev.update(
+            "[bold]Last event[/bold] "
+            + " ".join(f"{k}={v!r}" for k, v in sorted(self._last_event.items()))
+        )
 
     def _refresh_view(self) -> None:
         if self._latest is None:

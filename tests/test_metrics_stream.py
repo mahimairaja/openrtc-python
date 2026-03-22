@@ -49,6 +49,9 @@ class _StubPool:
     def __init__(self) -> None:
         self._snap = _minimal_snapshot()
 
+    def drain_metrics_stream_events(self) -> list[dict[str, object]]:
+        return []
+
     def runtime_snapshot(self) -> PoolRuntimeSnapshot:
         return self._snap
 
@@ -69,6 +72,47 @@ def test_parse_metrics_jsonl_line() -> None:
     assert parse_metrics_jsonl_line("") is None
     assert parse_metrics_jsonl_line("not-json") is None
     assert parse_metrics_jsonl_line('{"schema_version": 999}') is None
+
+
+def test_parse_metrics_jsonl_line_accepts_event() -> None:
+    line = json.dumps(
+        {
+            "schema_version": METRICS_STREAM_SCHEMA_VERSION,
+            "kind": "event",
+            "seq": 2,
+            "wall_time_unix": 3.0,
+            "payload": {"event": "session_started", "agent": "x"},
+        },
+        sort_keys=True,
+    )
+    rec = parse_metrics_jsonl_line(line)
+    assert rec is not None
+    assert rec["kind"] == "event"
+    assert rec["payload"]["agent"] == "x"
+
+
+def test_jsonl_sink_writes_snapshot_then_event(tmp_path: Path) -> None:
+    path = tmp_path / "e.jsonl"
+    sink = JsonlMetricsSink(path)
+    sink.open()
+    sink.write_snapshot(_minimal_snapshot())
+    sink.write_event({"event": "session_finished", "agent": "a"})
+    sink.close()
+    lines = path.read_text(encoding="utf-8").strip().split("\n")
+    assert len(lines) == 2
+    assert json.loads(lines[0])["kind"] == KIND_SNAPSHOT
+    assert json.loads(lines[1])["kind"] == "event"
+    assert json.loads(lines[1])["seq"] == 2
+
+
+def test_runtime_metrics_store_drains_stream_events() -> None:
+    from openrtc.resources import RuntimeMetricsStore
+
+    store = RuntimeMetricsStore()
+    store.record_session_started("dental")
+    drained = store.drain_stream_events()
+    assert drained == [{"event": "session_started", "agent": "dental"}]
+    assert store.drain_stream_events() == []
 
 
 def test_snapshot_envelope_shape() -> None:

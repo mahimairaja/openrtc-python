@@ -105,7 +105,7 @@ class RuntimeReporter:
         if self._thread is not None:
             self._thread.join(timeout=max(self._refresh_seconds * 2, 1.0))
         self._write_json_snapshot()
-        self._write_jsonl_snapshot()
+        self._emit_jsonl()
         if self._jsonl_sink is not None:
             self._jsonl_sink.close()
 
@@ -142,7 +142,7 @@ class RuntimeReporter:
                         self._write_json_snapshot()
                         next_periodic += self._refresh_seconds
                     if self._jsonl_sink is not None and now >= next_jsonl:
-                        self._write_jsonl_snapshot()
+                        self._emit_jsonl()
                         next_jsonl += self._jsonl_interval
                 live.update(self._build_dashboard_renderable())
             return
@@ -163,7 +163,7 @@ class RuntimeReporter:
                 self._write_json_snapshot()
                 next_periodic += self._refresh_seconds
             if self._jsonl_sink is not None and now >= next_jsonl:
-                self._write_jsonl_snapshot()
+                self._emit_jsonl()
                 next_jsonl += self._jsonl_interval
 
     def _build_dashboard_renderable(self) -> Panel:
@@ -180,10 +180,13 @@ class RuntimeReporter:
             encoding="utf-8",
         )
 
-    def _write_jsonl_snapshot(self) -> None:
+    def _emit_jsonl(self) -> None:
+        """Write one snapshot line then any queued session events (same tick)."""
         if self._jsonl_sink is None:
             return
         self._jsonl_sink.write_snapshot(self._pool.runtime_snapshot())
+        for ev in self._pool.drain_metrics_stream_events():
+            self._jsonl_sink.write_event(ev)
 
 
 def _format_percent(saved_bytes: int | None, baseline_bytes: int | None) -> str:

@@ -270,6 +270,10 @@ class AgentPool:
         """Return a live snapshot of worker metrics for dashboards and automation."""
         return self._runtime_state.metrics.snapshot(registered_agents=len(self._agents))
 
+    def drain_metrics_stream_events(self) -> list[dict[str, Any]]:
+        """Drain pending session lifecycle events for JSONL sidecar export."""
+        return self._runtime_state.metrics.drain_stream_events()
+
     def add(
         self,
         name: str,

@@ -10,7 +10,8 @@ file. This is the contract for ``openrtc tui --watch``.
 * ``seq`` (int): monotonically increasing counter for this worker process.
 * ``wall_time_unix`` (float): ``time.time()`` when the record was emitted.
 * ``payload`` (dict): for ``kind == "snapshot"``, same shape as
-  :meth:`PoolRuntimeSnapshot.to_dict`.
+  :meth:`PoolRuntimeSnapshot.to_dict`; for ``kind == "event"``, small dicts such
+  as ``{"event": "session_started", "agent": "..."}``.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from openrtc.resources import PoolRuntimeSnapshot
 
 METRICS_STREAM_SCHEMA_VERSION = 1
 KIND_SNAPSHOT = "snapshot"
+KIND_EVENT = "event"
 
 
 def snapshot_envelope(*, seq: int, snapshot: PoolRuntimeSnapshot) -> dict[str, Any]:
@@ -39,7 +41,7 @@ def snapshot_envelope(*, seq: int, snapshot: PoolRuntimeSnapshot) -> dict[str, A
 
 
 def parse_metrics_jsonl_line(line: str) -> dict[str, Any] | None:
-    """Return a parsed snapshot record, or ``None`` if the line is not a snapshot."""
+    """Return a parsed stream record (snapshot or event), or ``None`` if invalid."""
     stripped = line.strip()
     if not stripped:
         return None
@@ -49,9 +51,21 @@ def parse_metrics_jsonl_line(line: str) -> dict[str, Any] | None:
         return None
     if record.get("schema_version") != METRICS_STREAM_SCHEMA_VERSION:
         return None
-    if record.get("kind") != KIND_SNAPSHOT:
+    kind = record.get("kind")
+    if kind not in (KIND_SNAPSHOT, KIND_EVENT):
         return None
     return record
+
+
+def event_envelope(*, seq: int, payload: dict[str, Any]) -> dict[str, Any]:
+    """Build a JSON object for one session lifecycle (or similar) event line."""
+    return {
+        "schema_version": METRICS_STREAM_SCHEMA_VERSION,
+        "kind": KIND_EVENT,
+        "seq": seq,
+        "wall_time_unix": time.time(),
+        "payload": dict(payload),
+    }
 
 
 class JsonlMetricsSink:
@@ -75,6 +89,16 @@ class JsonlMetricsSink:
                 raise RuntimeError("JsonlMetricsSink.open() was not called")
             self._seq += 1
             record = snapshot_envelope(seq=self._seq, snapshot=snapshot)
+            self._file.write(json.dumps(record, sort_keys=True) + "\n")
+            self._file.flush()
+
+    def write_event(self, payload: dict[str, Any]) -> None:
+        """Append one event line after the current ``seq`` (thread-safe)."""
+        with self._lock:
+            if self._file is None:
+                raise RuntimeError("JsonlMetricsSink.open() was not called")
+            self._seq += 1
+            record = event_envelope(seq=self._seq, payload=payload)
             self._file.write(json.dumps(record, sort_keys=True) + "\n")
             self._file.flush()
 
