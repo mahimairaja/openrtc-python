@@ -588,3 +588,9 @@ def test_runtime_snapshot_does_not_leak_active_sessions_when_session_constructor
     assert snapshot.total_sessions_started == 0
     assert snapshot.total_session_failures == 0
     assert snapshot.sessions_by_agent == {}
+
+
+def test_drain_metrics_stream_events_delegates_to_runtime_store() -> None:
+    pool = AgentPool()
+    pool.add("test", DemoAgent, stt="a", llm="b", tts="c")
+    assert pool.drain_metrics_stream_events() == []

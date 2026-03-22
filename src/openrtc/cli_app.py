@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
 import sys
 import threading
+import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -14,7 +18,9 @@ from rich.panel import Panel
 from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.text import Text
+from typer import Context
 
+from openrtc.metrics_stream import JsonlMetricsSink
 from openrtc.pool import AgentConfig, AgentPool
 from openrtc.resources import (
     PoolRuntimeSnapshot,
@@ -27,9 +33,28 @@ from openrtc.resources import (
 
 logger = logging.getLogger("openrtc")
 
+PANEL_OPENRTC = "OpenRTC"
+PANEL_LIVEKIT = "Connection"
+PANEL_ADVANCED = "Advanced"
+
+_QUICKSTART_EPILOG = (
+    "[bold]Typical usage[/bold]: set [code]LIVEKIT_URL[/code], [code]LIVEKIT_API_KEY[/code], "
+    "and [code]LIVEKIT_API_SECRET[/code], then run "
+    "[code]openrtc dev --agents-dir PATH[/code] (or [code]start[/code] in production). "
+    "Defaults are conservative (e.g. no dashboard, 1s refresh); tuning flags are under "
+    "the [bold]Advanced[/bold] group in each command's [code]--help[/code]."
+)
+
 app = typer.Typer(
     name="openrtc",
-    help="Discover and run multiple LiveKit agents in one worker.",
+    help=(
+        "Run multiple LiveKit voice agents from one shared worker. Commands match "
+        "LiveKit Agents ([code]dev[/code], [code]start[/code], [code]console[/code], "
+        "[code]connect[/code], [code]download-files[/code]) plus [code]list[/code] and "
+        "[code]tui[/code]. Only [code]--agents-dir[/code] is required for worker commands; "
+        "credentials use [code]LIVEKIT_*[/code] env vars by default (CLI flags optional)."
+    ),
+    epilog=_QUICKSTART_EPILOG,
     pretty_exceptions_show_locals=False,
     rich_markup_mode="rich",
     no_args_is_help=True,
@@ -39,7 +64,7 @@ console = Console()
 
 
 class RuntimeReporter:
-    """Background reporter that renders a Rich dashboard and/or JSON snapshots."""
+    """Background reporter: Rich dashboard, static JSON file, and/or JSONL stream."""
 
     def __init__(
         self,
@@ -48,17 +73,33 @@ class RuntimeReporter:
         dashboard: bool,
         refresh_seconds: float,
         json_output_path: Path | None,
+        metrics_jsonl_path: Path | None = None,
+        metrics_jsonl_interval: float | None = None,
     ) -> None:
         self._pool = pool
         self._dashboard = dashboard
         self._refresh_seconds = max(refresh_seconds, 0.25)
         self._json_output_path = json_output_path
+        self._jsonl_interval = (
+            max(metrics_jsonl_interval, 0.25)
+            if metrics_jsonl_interval is not None
+            else self._refresh_seconds
+        )
+        self._jsonl_sink: JsonlMetricsSink | None = None
+        if metrics_jsonl_path is not None:
+            self._jsonl_sink = JsonlMetricsSink(metrics_jsonl_path)
+            self._jsonl_sink.open()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._needs_periodic_file_or_ui = dashboard or json_output_path is not None
 
     def start(self) -> None:
         """Start the background reporter when at least one output is enabled."""
-        if not self._dashboard and self._json_output_path is None:
+        if (
+            not self._dashboard
+            and self._json_output_path is None
+            and self._jsonl_sink is None
+        ):
             return
         self._thread = threading.Thread(
             target=self._run,
@@ -73,8 +114,43 @@ class RuntimeReporter:
         if self._thread is not None:
             self._thread.join(timeout=max(self._refresh_seconds * 2, 1.0))
         self._write_json_snapshot()
+        self._emit_jsonl()
+        if self._jsonl_sink is not None:
+            self._jsonl_sink.close()
 
     def _run(self) -> None:
+        now = time.monotonic()
+        next_periodic = (
+            now + self._refresh_seconds
+            if self._needs_periodic_file_or_ui
+            else float("inf")
+        )
+        next_jsonl = now + self._jsonl_interval if self._jsonl_sink else float("inf")
+
+        def schedule_cycle(live: Live | None) -> bool:
+            """Wait until the next tick; run JSON/JSONL/dashboard work. Return False to exit."""
+            nonlocal next_periodic, next_jsonl
+            n = time.monotonic()
+            wait_periodic = max(0.0, next_periodic - n)
+            wait_jsonl = (
+                max(0.0, next_jsonl - n)
+                if self._jsonl_sink is not None
+                else float("inf")
+            )
+            timeout = min(wait_periodic, wait_jsonl, 3600.0)
+            if self._stop_event.wait(timeout):
+                return False
+            n = time.monotonic()
+            if self._needs_periodic_file_or_ui and n >= next_periodic:
+                if live is not None:
+                    live.update(self._build_dashboard_renderable())
+                self._write_json_snapshot()
+                next_periodic += self._refresh_seconds
+            if self._jsonl_sink is not None and n >= next_jsonl:
+                self._emit_jsonl()
+                next_jsonl += self._jsonl_interval
+            return True
+
         if self._dashboard:
             with Live(
                 self._build_dashboard_renderable(),
@@ -82,14 +158,13 @@ class RuntimeReporter:
                 refresh_per_second=max(int(round(1 / self._refresh_seconds)), 1),
                 transient=True,
             ) as live:
-                while not self._stop_event.wait(self._refresh_seconds):
-                    live.update(self._build_dashboard_renderable())
-                    self._write_json_snapshot()
+                while schedule_cycle(live):
+                    pass
                 live.update(self._build_dashboard_renderable())
             return
 
-        while not self._stop_event.wait(self._refresh_seconds):
-            self._write_json_snapshot()
+        while schedule_cycle(None):
+            pass
 
     def _build_dashboard_renderable(self) -> Panel:
         snapshot = self._pool.runtime_snapshot()
@@ -104,6 +179,14 @@ class RuntimeReporter:
             json.dumps(payload, indent=2, sort_keys=True),
             encoding="utf-8",
         )
+
+    def _emit_jsonl(self) -> None:
+        """Write one snapshot line then any queued session events (same tick)."""
+        if self._jsonl_sink is None:
+            return
+        self._jsonl_sink.write_snapshot(self._pool.runtime_snapshot())
+        for ev in self._pool.drain_metrics_stream_events():
+            self._jsonl_sink.write_event(ev)
 
 
 def _format_percent(saved_bytes: int | None, baseline_bytes: int | None) -> str:
@@ -251,17 +334,206 @@ def _pool_kwargs(
     }
 
 
+_OPENRTC_ONLY_FLAGS_WITH_VALUE: frozenset[str] = frozenset(
+    {
+        "--agents-dir",
+        "--default-stt",
+        "--default-llm",
+        "--default-tts",
+        "--default-greeting",
+        "--dashboard-refresh",
+        "--metrics-json-file",
+        "--metrics-jsonl",
+        "--metrics-jsonl-interval",
+    }
+)
+_OPENRTC_ONLY_BOOL_FLAGS: frozenset[str] = frozenset({"--dashboard"})
+
+
+def _strip_openrtc_only_flags_for_livekit(argv_tail: list[str]) -> list[str]:
+    """Drop OpenRTC-only CLI flags; LiveKit's ``run_app`` parses ``sys.argv`` itself.
+
+    ``openrtc start`` / ``openrtc dev`` are implemented with Typer, then delegate to
+    :func:`livekit.agents.cli.run_app`, which builds a separate Typer application
+    that does not recognize OpenRTC options such as ``--agents-dir``. Those must
+    be removed before the handoff while preserving any forwarded LiveKit flags
+    (e.g. ``--reload``, ``--url``) when we add pass-through options later.
+
+    For flags in ``_OPENRTC_ONLY_FLAGS_WITH_VALUE``, the **next** token is always
+    consumed as the value when present, even if it starts with ``--`` (e.g. a
+    path or provider string must not be mistaken for a following flag).
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(argv_tail):
+        arg = argv_tail[i]
+        if arg == "--":
+            out.extend(argv_tail[i:])
+            break
+        if "=" in arg:
+            name = arg.split("=", 1)[0]
+            if (
+                name in _OPENRTC_ONLY_FLAGS_WITH_VALUE
+                or name in _OPENRTC_ONLY_BOOL_FLAGS
+            ):
+                i += 1
+                continue
+            out.append(arg)
+            i += 1
+            continue
+        if arg in _OPENRTC_ONLY_BOOL_FLAGS:
+            i += 1
+            continue
+        if arg in _OPENRTC_ONLY_FLAGS_WITH_VALUE:
+            i += 1
+            if i < len(argv_tail):
+                i += 1
+            continue
+        out.append(arg)
+        i += 1
+    return out
+
+
 def _livekit_sys_argv(subcommand: str) -> None:
-    """Set ``sys.argv`` for ``livekit.agents.cli.run_app`` without dropping user flags.
+    """Set ``sys.argv`` for ``livekit.agents.cli.run_app``.
+
+    OpenRTC-specific options are stripped because the LiveKit CLI re-parses
+    ``sys.argv`` and only accepts its own flags per subcommand.
 
     When the process was not started as ``openrtc <subcommand> ...`` (e.g. tests
     that patch ``sys.argv``), only ``[argv0, subcommand]`` is used.
     """
     prog = sys.argv[0]
     if len(sys.argv) >= 2 and sys.argv[1] == subcommand:
-        sys.argv = [prog, subcommand, *sys.argv[2:]]
+        rest = _strip_openrtc_only_flags_for_livekit(list(sys.argv[2:]))
+        sys.argv = [prog, subcommand, *rest]
     else:
         sys.argv = [prog, subcommand]
+
+
+_LIVEKIT_ENV_OVERRIDE_KEYS: tuple[str, ...] = (
+    "LIVEKIT_URL",
+    "LIVEKIT_API_KEY",
+    "LIVEKIT_API_SECRET",
+    "LIVEKIT_LOG_LEVEL",
+)
+
+
+def _snapshot_livekit_env() -> dict[str, str | None]:
+    return {key: os.environ.get(key) for key in _LIVEKIT_ENV_OVERRIDE_KEYS}
+
+
+def _restore_livekit_env(snapshot: dict[str, str | None]) -> None:
+    for key, previous in snapshot.items():
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+
+@contextlib.contextmanager
+def _livekit_env_overrides(
+    *,
+    url: str | None,
+    api_key: str | None,
+    api_secret: str | None,
+    log_level: str | None,
+) -> Iterator[None]:
+    """Temporarily set LiveKit env vars; restore previous values on exit."""
+    snapshot = _snapshot_livekit_env()
+    try:
+        if url is not None:
+            os.environ["LIVEKIT_URL"] = url
+        if api_key is not None:
+            os.environ["LIVEKIT_API_KEY"] = api_key
+        if api_secret is not None:
+            os.environ["LIVEKIT_API_SECRET"] = api_secret
+        if log_level is not None:
+            os.environ["LIVEKIT_LOG_LEVEL"] = log_level
+        yield
+    finally:
+        _restore_livekit_env(snapshot)
+
+
+def _delegate_discovered_pool_to_livekit(
+    *,
+    agents_dir: Path,
+    subcommand: str,
+    default_stt: str | None,
+    default_llm: str | None,
+    default_tts: str | None,
+    default_greeting: str | None,
+    dashboard: bool,
+    dashboard_refresh: float,
+    metrics_json_file: Path | None,
+    metrics_jsonl: Path | None,
+    metrics_jsonl_interval: float | None,
+    url: str | None,
+    api_key: str | None,
+    api_secret: str | None,
+    log_level: str | None,
+) -> None:
+    """Discover agents, optionally set connection env, then run a LiveKit CLI subcommand."""
+    pool = AgentPool(
+        **_pool_kwargs(default_stt, default_llm, default_tts, default_greeting)
+    )
+    _discover_or_exit(agents_dir, pool)
+    with _livekit_env_overrides(
+        url=url, api_key=api_key, api_secret=api_secret, log_level=log_level
+    ):
+        _livekit_sys_argv(subcommand)
+        _run_pool_with_reporting(
+            pool,
+            dashboard=dashboard,
+            dashboard_refresh=dashboard_refresh,
+            metrics_json_file=metrics_json_file,
+            metrics_jsonl=metrics_jsonl,
+            metrics_jsonl_interval=metrics_jsonl_interval,
+        )
+
+
+def _run_connect_handoff(
+    *,
+    agents_dir: Path,
+    default_stt: str | None,
+    default_llm: str | None,
+    default_tts: str | None,
+    default_greeting: str | None,
+    room: str,
+    participant_identity: str | None,
+    log_level: str | None,
+    url: str | None,
+    api_key: str | None,
+    api_secret: str | None,
+    dashboard: bool,
+    dashboard_refresh: float,
+    metrics_json_file: Path | None,
+    metrics_jsonl: Path | None,
+    metrics_jsonl_interval: float | None,
+) -> None:
+    """Hand off to LiveKit ``connect`` with explicit argv (Typer consumes flags first)."""
+    pool = AgentPool(
+        **_pool_kwargs(default_stt, default_llm, default_tts, default_greeting)
+    )
+    _discover_or_exit(agents_dir, pool)
+    with _livekit_env_overrides(
+        url=url, api_key=api_key, api_secret=api_secret, log_level=None
+    ):
+        prog = sys.argv[0]
+        tail: list[str] = ["connect", "--room", room]
+        if participant_identity is not None:
+            tail.extend(["--participant-identity", participant_identity])
+        if log_level is not None:
+            tail.extend(["--log-level", log_level])
+        sys.argv = [prog, *tail]
+        _run_pool_with_reporting(
+            pool,
+            dashboard=dashboard,
+            dashboard_refresh=dashboard_refresh,
+            metrics_json_file=metrics_json_file,
+            metrics_jsonl=metrics_jsonl,
+            metrics_jsonl_interval=metrics_jsonl_interval,
+        )
 
 
 def _discover_or_exit(agents_dir: Path, pool: AgentPool) -> list[AgentConfig]:
@@ -302,10 +574,11 @@ AgentsDirArg = Annotated[
     Path,
     typer.Option(
         "--agents-dir",
-        help="Directory containing discoverable agent modules.",
+        help="Directory of agent modules to load (only required flag for most workflows).",
         exists=False,
         resolve_path=True,
         path_type=Path,
+        rich_help_panel=PANEL_OPENRTC,
     ),
 ]
 
@@ -317,6 +590,7 @@ DefaultSttArg = Annotated[
             "Default STT provider used when a discovered agent does not "
             "override STT via @agent_config(...)."
         ),
+        rich_help_panel=PANEL_OPENRTC,
     ),
 ]
 
@@ -328,6 +602,7 @@ DefaultLlmArg = Annotated[
             "Default LLM provider used when a discovered agent does not "
             "override LLM via @agent_config(...)."
         ),
+        rich_help_panel=PANEL_OPENRTC,
     ),
 ]
 
@@ -339,6 +614,7 @@ DefaultTtsArg = Annotated[
             "Default TTS provider used when a discovered agent does not "
             "override TTS via @agent_config(...)."
         ),
+        rich_help_panel=PANEL_OPENRTC,
     ),
 ]
 
@@ -350,6 +626,7 @@ DefaultGreetingArg = Annotated[
             "Default greeting used when a discovered agent does not "
             "override greeting via @agent_config(...)."
         ),
+        rich_help_panel=PANEL_ADVANCED,
     ),
 ]
 
@@ -357,7 +634,8 @@ DashboardArg = Annotated[
     bool,
     typer.Option(
         "--dashboard",
-        help="Show a live Rich dashboard with worker memory and active sessions.",
+        help="Show a live Rich dashboard (off by default; use for local debugging).",
+        rich_help_panel=PANEL_OPENRTC,
     ),
 ]
 
@@ -366,7 +644,8 @@ DashboardRefreshArg = Annotated[
     typer.Option(
         "--dashboard-refresh",
         min=0.25,
-        help="Refresh interval in seconds for the runtime dashboard and metrics file.",
+        help="Refresh interval in seconds for dashboard / metrics file / JSONL (default 1s).",
+        rich_help_panel=PANEL_ADVANCED,
     ),
 ]
 
@@ -374,9 +653,113 @@ MetricsJsonFileArg = Annotated[
     Path | None,
     typer.Option(
         "--metrics-json-file",
-        help="Write live runtime metrics snapshots to this JSON file for automation.",
+        help="Overwrite a JSON file each tick with the latest snapshot (automation / CI).",
         resolve_path=True,
         path_type=Path,
+        rich_help_panel=PANEL_ADVANCED,
+    ),
+]
+
+MetricsJsonlArg = Annotated[
+    Path | None,
+    typer.Option(
+        "--metrics-jsonl",
+        help=(
+            "Append JSON Lines for ``openrtc tui --watch`` (off by default; "
+            "truncates when the worker starts)."
+        ),
+        resolve_path=True,
+        path_type=Path,
+        rich_help_panel=PANEL_OPENRTC,
+    ),
+]
+
+MetricsJsonlIntervalArg = Annotated[
+    float | None,
+    typer.Option(
+        "--metrics-jsonl-interval",
+        min=0.25,
+        help=("Seconds between JSONL records (default: same as --dashboard-refresh)."),
+        rich_help_panel=PANEL_ADVANCED,
+    ),
+]
+
+TuiWatchPathArg = Annotated[
+    Path,
+    typer.Option(
+        "--watch",
+        help="JSONL file written by the worker's --metrics-jsonl.",
+        resolve_path=True,
+        path_type=Path,
+        rich_help_panel=PANEL_OPENRTC,
+    ),
+]
+
+TuiFromStartArg = Annotated[
+    bool,
+    typer.Option(
+        "--from-start",
+        help="Read the file from the beginning instead of tailing from EOF.",
+        rich_help_panel=PANEL_ADVANCED,
+    ),
+]
+
+LiveKitUrlArg = Annotated[
+    str | None,
+    typer.Option(
+        "--url",
+        help="WebSocket URL of the LiveKit server or Cloud project.",
+        envvar="LIVEKIT_URL",
+        rich_help_panel=PANEL_LIVEKIT,
+    ),
+]
+
+LiveKitApiKeyArg = Annotated[
+    str | None,
+    typer.Option(
+        "--api-key",
+        help="API key for the LiveKit server or Cloud project.",
+        envvar="LIVEKIT_API_KEY",
+        rich_help_panel=PANEL_LIVEKIT,
+    ),
+]
+
+LiveKitApiSecretArg = Annotated[
+    str | None,
+    typer.Option(
+        "--api-secret",
+        help="API secret for the LiveKit server or Cloud project.",
+        envvar="LIVEKIT_API_SECRET",
+        rich_help_panel=PANEL_LIVEKIT,
+    ),
+]
+
+ConnectRoomArg = Annotated[
+    str,
+    typer.Option(
+        "--room",
+        help="Room name to connect to (same as LiveKit Agents [code]connect[/code]).",
+        rich_help_panel=PANEL_LIVEKIT,
+    ),
+]
+
+ConnectParticipantArg = Annotated[
+    str | None,
+    typer.Option(
+        "--participant-identity",
+        help="Agent participant identity when connecting to the room.",
+        rich_help_panel=PANEL_ADVANCED,
+    ),
+]
+
+LiveKitLogLevelArg = Annotated[
+    str | None,
+    typer.Option(
+        "--log-level",
+        help="Log level (e.g. DEBUG, INFO, WARN, ERROR).",
+        envvar="LIVEKIT_LOG_LEVEL",
+        case_sensitive=False,
+        rich_help_panel=PANEL_ADVANCED,
     ),
 ]
 
@@ -394,6 +777,7 @@ def list_command(
                 "Memory line is OS-specific (Linux: current VmRSS; macOS: peak "
                 "ru_maxrss, not live RSS—see JSON description)."
             ),
+            rich_help_panel=PANEL_ADVANCED,
         ),
     ] = False,
     json_output: Annotated[
@@ -565,54 +949,214 @@ def _build_list_json_payload(
     return payload
 
 
-@app.command("start")
+_LIVEKIT_CLI_CONTEXT_SETTINGS = {
+    "allow_extra_args": True,
+    "ignore_unknown_options": True,
+}
+
+
+@app.command("start", context_settings=_LIVEKIT_CLI_CONTEXT_SETTINGS)
 def start_command(
+    _ctx: Context,
     agents_dir: AgentsDirArg,
     default_stt: DefaultSttArg = None,
     default_llm: DefaultLlmArg = None,
     default_tts: DefaultTtsArg = None,
     default_greeting: DefaultGreetingArg = None,
+    url: LiveKitUrlArg = None,
+    api_key: LiveKitApiKeyArg = None,
+    api_secret: LiveKitApiSecretArg = None,
+    log_level: LiveKitLogLevelArg = None,
     dashboard: DashboardArg = False,
     dashboard_refresh: DashboardRefreshArg = 1.0,
     metrics_json_file: MetricsJsonFileArg = None,
+    metrics_jsonl: MetricsJsonlArg = None,
+    metrics_jsonl_interval: MetricsJsonlIntervalArg = None,
 ) -> None:
-    """Run the LiveKit worker (production-style entrypoint)."""
-    pool = AgentPool(
-        **_pool_kwargs(default_stt, default_llm, default_tts, default_greeting)
-    )
-    _discover_or_exit(agents_dir, pool)
-    _livekit_sys_argv("start")
-    _run_pool_with_reporting(
-        pool,
+    """Run the worker (same role as [code]python agent.py start[/code] with LiveKit)."""
+    _delegate_discovered_pool_to_livekit(
+        agents_dir=agents_dir,
+        subcommand="start",
+        default_stt=default_stt,
+        default_llm=default_llm,
+        default_tts=default_tts,
+        default_greeting=default_greeting,
         dashboard=dashboard,
         dashboard_refresh=dashboard_refresh,
         metrics_json_file=metrics_json_file,
+        metrics_jsonl=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
+        url=url,
+        api_key=api_key,
+        api_secret=api_secret,
+        log_level=log_level,
     )
 
 
-@app.command("dev")
+@app.command("dev", context_settings=_LIVEKIT_CLI_CONTEXT_SETTINGS)
 def dev_command(
+    _ctx: Context,
     agents_dir: AgentsDirArg,
     default_stt: DefaultSttArg = None,
     default_llm: DefaultLlmArg = None,
     default_tts: DefaultTtsArg = None,
     default_greeting: DefaultGreetingArg = None,
+    url: LiveKitUrlArg = None,
+    api_key: LiveKitApiKeyArg = None,
+    api_secret: LiveKitApiSecretArg = None,
+    log_level: LiveKitLogLevelArg = None,
     dashboard: DashboardArg = False,
     dashboard_refresh: DashboardRefreshArg = 1.0,
     metrics_json_file: MetricsJsonFileArg = None,
+    metrics_jsonl: MetricsJsonlArg = None,
+    metrics_jsonl_interval: MetricsJsonlIntervalArg = None,
 ) -> None:
-    """Run the LiveKit worker in development mode."""
-    pool = AgentPool(
-        **_pool_kwargs(default_stt, default_llm, default_tts, default_greeting)
-    )
-    _discover_or_exit(agents_dir, pool)
-    _livekit_sys_argv("dev")
-    _run_pool_with_reporting(
-        pool,
+    """Development worker with reload (same role as [code]python agent.py dev[/code])."""
+    _delegate_discovered_pool_to_livekit(
+        agents_dir=agents_dir,
+        subcommand="dev",
+        default_stt=default_stt,
+        default_llm=default_llm,
+        default_tts=default_tts,
+        default_greeting=default_greeting,
         dashboard=dashboard,
         dashboard_refresh=dashboard_refresh,
         metrics_json_file=metrics_json_file,
+        metrics_jsonl=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
+        url=url,
+        api_key=api_key,
+        api_secret=api_secret,
+        log_level=log_level,
     )
+
+
+@app.command("console", context_settings=_LIVEKIT_CLI_CONTEXT_SETTINGS)
+def console_command(
+    _ctx: Context,
+    agents_dir: AgentsDirArg,
+    default_stt: DefaultSttArg = None,
+    default_llm: DefaultLlmArg = None,
+    default_tts: DefaultTtsArg = None,
+    default_greeting: DefaultGreetingArg = None,
+    url: LiveKitUrlArg = None,
+    api_key: LiveKitApiKeyArg = None,
+    api_secret: LiveKitApiSecretArg = None,
+    log_level: LiveKitLogLevelArg = None,
+    dashboard: DashboardArg = False,
+    dashboard_refresh: DashboardRefreshArg = 1.0,
+    metrics_json_file: MetricsJsonFileArg = None,
+    metrics_jsonl: MetricsJsonlArg = None,
+    metrics_jsonl_interval: MetricsJsonlIntervalArg = None,
+) -> None:
+    """Local console session (same role as [code]python agent.py console[/code])."""
+    _delegate_discovered_pool_to_livekit(
+        agents_dir=agents_dir,
+        subcommand="console",
+        default_stt=default_stt,
+        default_llm=default_llm,
+        default_tts=default_tts,
+        default_greeting=default_greeting,
+        dashboard=dashboard,
+        dashboard_refresh=dashboard_refresh,
+        metrics_json_file=metrics_json_file,
+        metrics_jsonl=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
+        url=url,
+        api_key=api_key,
+        api_secret=api_secret,
+        log_level=log_level,
+    )
+
+
+@app.command("connect", context_settings=_LIVEKIT_CLI_CONTEXT_SETTINGS)
+def connect_command(
+    _ctx: Context,
+    agents_dir: AgentsDirArg,
+    room: ConnectRoomArg,
+    default_stt: DefaultSttArg = None,
+    default_llm: DefaultLlmArg = None,
+    default_tts: DefaultTtsArg = None,
+    default_greeting: DefaultGreetingArg = None,
+    participant_identity: ConnectParticipantArg = None,
+    log_level: LiveKitLogLevelArg = None,
+    url: LiveKitUrlArg = None,
+    api_key: LiveKitApiKeyArg = None,
+    api_secret: LiveKitApiSecretArg = None,
+    dashboard: DashboardArg = False,
+    dashboard_refresh: DashboardRefreshArg = 1.0,
+    metrics_json_file: MetricsJsonFileArg = None,
+    metrics_jsonl: MetricsJsonlArg = None,
+    metrics_jsonl_interval: MetricsJsonlIntervalArg = None,
+) -> None:
+    """Connect the worker to an existing room (LiveKit [code]connect[/code])."""
+    _run_connect_handoff(
+        agents_dir=agents_dir,
+        default_stt=default_stt,
+        default_llm=default_llm,
+        default_tts=default_tts,
+        default_greeting=default_greeting,
+        room=room,
+        participant_identity=participant_identity,
+        log_level=log_level,
+        url=url,
+        api_key=api_key,
+        api_secret=api_secret,
+        dashboard=dashboard,
+        dashboard_refresh=dashboard_refresh,
+        metrics_json_file=metrics_json_file,
+        metrics_jsonl=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
+    )
+
+
+@app.command("download-files")
+def download_files_command(
+    agents_dir: AgentsDirArg,
+    url: LiveKitUrlArg = None,
+    api_key: LiveKitApiKeyArg = None,
+    api_secret: LiveKitApiSecretArg = None,
+    log_level: LiveKitLogLevelArg = None,
+) -> None:
+    """Download plugin assets (LiveKit [code]download-files[/code]).
+
+    Uses the same discovery path as other commands so the worker entrypoint is
+    valid; provider defaults are not needed for this subcommand.
+    """
+    _delegate_discovered_pool_to_livekit(
+        agents_dir=agents_dir,
+        subcommand="download-files",
+        default_stt=None,
+        default_llm=None,
+        default_tts=None,
+        default_greeting=None,
+        dashboard=False,
+        dashboard_refresh=1.0,
+        metrics_json_file=None,
+        metrics_jsonl=None,
+        metrics_jsonl_interval=None,
+        url=url,
+        api_key=api_key,
+        api_secret=api_secret,
+        log_level=log_level,
+    )
+
+
+@app.command("tui")
+def tui_command(
+    watch: TuiWatchPathArg,
+    from_start: TuiFromStartArg = False,
+) -> None:
+    """Sidecar Textual UI for a --metrics-jsonl stream (requires the ``tui`` extra)."""
+    try:
+        from openrtc.tui_app import run_metrics_tui
+    except ImportError as exc:
+        logger.error(
+            "The TUI requires Textual. Install with: pip install 'openrtc[tui]' "
+            "(the cli extra is required for the openrtc command)."
+        )
+        raise typer.Exit(code=1) from exc
+    run_metrics_tui(watch, from_start=from_start)
 
 
 def _run_pool_with_reporting(
@@ -621,12 +1165,16 @@ def _run_pool_with_reporting(
     dashboard: bool,
     dashboard_refresh: float,
     metrics_json_file: Path | None,
+    metrics_jsonl: Path | None = None,
+    metrics_jsonl_interval: float | None = None,
 ) -> None:
     reporter = RuntimeReporter(
         pool,
         dashboard=dashboard,
         refresh_seconds=dashboard_refresh,
         json_output_path=metrics_json_file,
+        metrics_jsonl_path=metrics_jsonl,
+        metrics_jsonl_interval=metrics_jsonl_interval,
     )
     reporter.start()
     try:
@@ -741,7 +1289,8 @@ def main(argv: list[str] | None = None) -> int:
     still use CliRunner). Pass ``args`` without the program name when invoking
     programmatically; ``prog_name`` matches the ``openrtc`` console script.
 
-    ``start`` / ``dev`` mutate :data:`sys.argv` before ``pool.run()``; we restore
+    Worker subcommands (``start``, ``dev``, ``console``, ``connect``,
+    ``download-files``) mutate :data:`sys.argv` before ``pool.run()``; we restore
     the previous argv list after the command finishes so programmatic callers
     are not polluted.
     """

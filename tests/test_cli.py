@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import builtins
 import importlib
 import json
 import logging
+import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,10 +17,19 @@ from typer.testing import CliRunner
 
 from openrtc.cli import app, main
 from openrtc.resources import (
+    MetricsStreamEvent,
     PoolRuntimeSnapshot,
     ProcessResidentSetInfo,
     SavingsEstimate,
 )
+
+# Rich/Click may inject ANSI and soft-wrap error text; normalize before substring checks.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _normalize_cli_output_for_assert(text: str) -> str:
+    plain = _ANSI_ESCAPE_RE.sub("", text)
+    return plain.replace("\n", "").replace("\r", "")
 
 
 @dataclass
@@ -59,6 +71,9 @@ class StubPool:
 
     def run(self) -> None:
         self.run_called = True
+
+    def drain_metrics_stream_events(self) -> list[MetricsStreamEvent]:
+        return []
 
     def runtime_snapshot(self) -> PoolRuntimeSnapshot:
         self.runtime_snapshot_calls += 1
@@ -185,10 +200,20 @@ def test_cli_passes_pool_defaults_into_agent_pool(
     assert created_pools[0].default_greeting == "Hello from OpenRTC."
 
 
-@pytest.mark.parametrize("command", ["start", "dev"])
+@pytest.mark.parametrize(
+    ("command", "extra_args"),
+    [
+        ("start", ["--agents-dir", "./agents"]),
+        ("dev", ["--agents-dir", "./agents"]),
+        ("console", ["--agents-dir", "./agents"]),
+        ("download-files", ["--agents-dir", "./agents"]),
+        ("connect", ["--agents-dir", "./agents", "--room", "demo-room"]),
+    ],
+)
 def test_run_commands_inject_livekit_mode_and_run_pool(
     monkeypatch: pytest.MonkeyPatch,
     command: str,
+    extra_args: list[str],
     original_argv: list[str],
 ) -> None:
     stub_pool = StubPool(
@@ -197,7 +222,7 @@ def test_run_commands_inject_livekit_mode_and_run_pool(
     monkeypatch.setattr("openrtc.cli_app.AgentPool", lambda **kwargs: stub_pool)
     monkeypatch.setattr(sys, "argv", original_argv.copy())
 
-    exit_code = main([command, "--agents-dir", "./agents"])
+    exit_code = main([command, *extra_args])
 
     assert exit_code == 0
     assert stub_pool.run_called is True
@@ -216,6 +241,27 @@ def test_cli_returns_non_zero_when_no_agents_are_discovered(
     assert exit_code == 1
 
 
+def test_download_files_has_minimal_options_no_provider_defaults(
+    tmp_path: Path,
+) -> None:
+    """download-files only needs agents dir + connection; no --default-* flags."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "download-files",
+            "--agents-dir",
+            str(tmp_path),
+            "--default-stt",
+            "deepgram/x",
+        ],
+    )
+    assert result.exit_code == 2
+    out = (result.stdout or "") + (result.stderr or "")
+    normalized = _normalize_cli_output_for_assert(out)
+    assert re.search(r"default[-_]stt", normalized), normalized[:800]
+
+
 def test_list_exits_cleanly_when_agents_dir_does_not_exist(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -226,6 +272,104 @@ def test_list_exits_cleanly_when_agents_dir_does_not_exist(
         result = runner.invoke(app, ["list", "--agents-dir", str(missing)])
     assert result.exit_code == 1
     assert "does not exist" in caplog.text
+
+
+def test_strip_openrtc_only_flags_for_livekit_removes_openrtc_options() -> None:
+    """LiveKit ``run_app`` must not see OpenRTC-only flags (see ``_livekit_sys_argv``)."""
+    from openrtc.cli_app import _strip_openrtc_only_flags_for_livekit
+
+    tail = [
+        "--agents-dir",
+        "./agents",
+        "--dashboard",
+        "--dashboard-refresh",
+        "2.0",
+        "--metrics-json-file",
+        "/tmp/m.json",
+        "--default-stt",
+        "x",
+        "--default-llm",
+        "y",
+        "--default-tts",
+        "z",
+        "--default-greeting",
+        "hi",
+        "--metrics-jsonl",
+        "/tmp/x.jsonl",
+        "--metrics-jsonl-interval",
+        "0.5",
+        "--reload",
+        "--log-level",
+        "DEBUG",
+    ]
+    assert _strip_openrtc_only_flags_for_livekit(tail) == [
+        "--reload",
+        "--log-level",
+        "DEBUG",
+    ]
+    assert _strip_openrtc_only_flags_for_livekit(["--agents-dir=./a", "--reload"]) == [
+        "--reload"
+    ]
+    assert _strip_openrtc_only_flags_for_livekit([]) == []
+    assert _strip_openrtc_only_flags_for_livekit(
+        ["--metrics-json-file", "--not-a-flag", "--reload"],
+    ) == ["--reload"]
+
+
+def test_dev_passes_reload_through_argv_strip(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import openrtc.cli_app as cli_app_mod
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    stub_pool = StubPool(discovered=[StubConfig(name="a", agent_cls=StubAgent)])
+    monkeypatch.setattr(cli_app_mod, "AgentPool", lambda **kwargs: stub_pool)
+
+    def _run_pool_stub(pool: StubPool, **kwargs: Any) -> None:
+        pool.run()
+
+    monkeypatch.setattr(cli_app_mod, "_run_pool_with_reporting", _run_pool_stub)
+    real_strip = cli_app_mod._strip_openrtc_only_flags_for_livekit
+    recorded: list[tuple[list[str], list[str]]] = []
+
+    def recording_strip(tail: list[str]) -> list[str]:
+        out = real_strip(tail)
+        recorded.append((list(tail), list(out)))
+        return out
+
+    monkeypatch.setattr(
+        cli_app_mod,
+        "_strip_openrtc_only_flags_for_livekit",
+        recording_strip,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["openrtc", "dev", "--agents-dir", str(agents), "--reload"],
+    )
+    exit_code = main(["dev", "--agents-dir", str(agents), "--reload"])
+    assert exit_code == 0
+    assert stub_pool.run_called
+    assert recorded
+    assert recorded[0][1] == ["--reload"]
+
+
+def test_livekit_env_restored_after_delegate_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import openrtc.cli_app as cli_app_mod
+
+    stub_pool = StubPool(discovered=[StubConfig(name="a", agent_cls=StubAgent)])
+    monkeypatch.setattr(cli_app_mod, "AgentPool", lambda **kwargs: stub_pool)
+    monkeypatch.setattr(cli_app_mod, "_run_pool_with_reporting", lambda *a, **k: None)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://persist")
+    exit_code = main(
+        ["start", "--agents-dir", "./agents", "--url", "ws://temporary-override"],
+    )
+    assert exit_code == 0
+    assert os.environ.get("LIVEKIT_URL") == "ws://persist"
 
 
 def test_cli_entrypoint_documents_optional_extra() -> None:
@@ -404,3 +548,64 @@ def test_start_command_can_write_runtime_metrics_json(
     assert data["active_sessions"] == 1
     assert data["registered_agents"] == 1
     assert data["sessions_by_agent"]["restaurant"] == 1
+
+
+def test_start_command_metrics_jsonl_writes_snapshot_records(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``--metrics-jsonl`` produces JSON Lines the sidecar TUI can tail."""
+    jsonl = tmp_path / "sidecar.jsonl"
+    stub_pool = StubPool(
+        discovered=[StubConfig(name="restaurant", agent_cls=StubAgent)]
+    )
+    monkeypatch.setattr("openrtc.cli_app.AgentPool", lambda **kwargs: stub_pool)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "start",
+            "--agents-dir",
+            "./agents",
+            "--metrics-jsonl",
+            str(jsonl),
+            "--metrics-jsonl-interval",
+            "0.3",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert stub_pool.run_called is True
+    lines = [ln for ln in jsonl.read_text(encoding="utf-8").split("\n") if ln.strip()]
+    assert len(lines) >= 1
+    first = json.loads(lines[0])
+    assert first["schema_version"] == 1
+    assert first["kind"] == "snapshot"
+    assert "payload" in first
+    assert first["payload"]["registered_agents"] == 1
+
+
+def test_tui_command_exits_when_textual_is_not_importable(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``openrtc tui`` fails fast with a clear message if the TUI extra is absent."""
+    real_import = builtins.__import__
+
+    def guard(name: str, *args: object, **kwargs: object) -> object:
+        if name == "openrtc.tui_app":
+            raise ImportError("simulated missing textual")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guard)
+    runner = CliRunner()
+    with caplog.at_level(logging.ERROR, logger="openrtc"):
+        result = runner.invoke(
+            app,
+            ["tui", "--watch", "./metrics.jsonl"],
+            catch_exceptions=False,
+        )
+    assert result.exit_code == 1
+    assert "Textual" in caplog.text
+    assert "openrtc[tui]" in caplog.text

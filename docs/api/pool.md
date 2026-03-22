@@ -211,7 +211,8 @@ snapshot = pool.runtime_snapshot()
 ```
 
 Returns a typed runtime snapshot for the current shared worker. The snapshot is
-used by the CLI dashboard and `--metrics-json-file` output and includes:
+used by the CLI dashboard, `--metrics-json-file`, and `kind: "snapshot"` lines
+in `--metrics-jsonl` output. It includes:
 
 - resident memory metadata
 - registered and active session counts
@@ -220,6 +221,16 @@ used by the CLI dashboard and `--metrics-json-file` output and includes:
 - session failure count
 - last routed agent
 - a best-effort shared-worker savings estimate
+
+## `drain_metrics_stream_events()`
+
+```python
+events = pool.drain_metrics_stream_events()
+```
+
+Removes and returns queued **session lifecycle** records for JSONL export
+(`session_started`, `session_finished`, `session_failed`). The OpenRTC CLI calls
+this when writing `--metrics-jsonl`; most applications can ignore it.
 
 ## Routing behavior
 

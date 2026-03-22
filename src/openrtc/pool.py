@@ -18,7 +18,11 @@ from typing import Any, TypeVar
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, cli
 
-from openrtc.resources import PoolRuntimeSnapshot, RuntimeMetricsStore
+from openrtc.resources import (
+    MetricsStreamEvent,
+    PoolRuntimeSnapshot,
+    RuntimeMetricsStore,
+)
 
 logger = logging.getLogger("openrtc")
 
@@ -269,6 +273,10 @@ class AgentPool:
     def runtime_snapshot(self) -> PoolRuntimeSnapshot:
         """Return a live snapshot of worker metrics for dashboards and automation."""
         return self._runtime_state.metrics.snapshot(registered_agents=len(self._agents))
+
+    def drain_metrics_stream_events(self) -> list[MetricsStreamEvent]:
+        """Drain pending session lifecycle events for JSONL sidecar export."""
+        return self._runtime_state.metrics.drain_stream_events()
 
     def add(
         self,

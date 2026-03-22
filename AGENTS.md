@@ -403,7 +403,7 @@ When in doubt:
 All commands are documented in `CONTRIBUTING.md`. Quick reference:
 
 - **Install deps:** `uv sync --group dev`
-- **Tests:** `uv run pytest` (36 tests, all self-contained)
+- **Tests:** `uv run pytest` (self-contained; no LiveKit server required)
 - **Lint:** `uv run ruff check .`
 - **Format check:** `uv run ruff format --check .`
 - **Type check:** `uv run mypy src/` (3 pre-existing errors as of this writing)
@@ -414,6 +414,6 @@ All commands are documented in `CONTRIBUTING.md`. Quick reference:
 - The `tests/conftest.py` creates a fake `livekit.agents` module when the real one isn't importable. This allows tests to run without the full LiveKit SDK. The real SDK *is* installed by `uv sync`, but if you see import weirdness in tests, this shim is the reason.
 - Version is derived from git tags via `hatch-vcs`. In a dev checkout the version will be something like `0.0.9.dev0+g<hash>`.
 - `mypy` has 3 pre-existing errors in `pool.py` — these are not regressions from your changes.
-- Running `openrtc start` or `openrtc dev` requires a running LiveKit server and provider API keys. For development validation, use `openrtc list` which exercises discovery and routing without network dependencies.
+- Running `openrtc start` or `openrtc dev` requires a running LiveKit server and provider API keys. For development validation, use `openrtc list` which exercises discovery and routing without network dependencies. The optional sidecar metrics TUI (`openrtc tui --watch`, requires `openrtc[tui]` / dev deps) tails `--metrics-jsonl` from a worker in another terminal.
 - `pytest-cov` is in the dev dependency group; CI uses `--cov-fail-under=80`; run
   `uv run pytest --cov=openrtc --cov-report=xml --cov-fail-under=80` to match.

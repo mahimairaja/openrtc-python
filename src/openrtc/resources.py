@@ -3,16 +3,33 @@ from __future__ import annotations
 import logging
 import sys
 import time
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     from openrtc.pool import AgentConfig
 
 logger = logging.getLogger("openrtc")
+
+_STREAM_EVENTS_MAXLEN = 256
+
+
+class MetricsStreamEvent(TypedDict, total=False):
+    """One drained session lifecycle row for JSONL export.
+
+    Rows always include ``event`` and ``agent`` from the store; ``session_failed``
+    rows may include ``error``. A synthetic ``metrics_stream_overflow`` row may
+    include ``overflow_dropped``.
+    """
+
+    event: str
+    agent: str
+    error: str
+    overflow_dropped: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,8 +126,22 @@ class RuntimeMetricsStore:
     last_error: str | None = None
     sessions_by_agent: dict[str, int] = field(default_factory=dict)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
+    _stream_events: deque[MetricsStreamEvent] = field(
+        default_factory=deque,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _metrics_stream_overflow_since_drain: int = field(
+        default=0,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __getstate__(self) -> dict[str, object]:
+        with self._lock:
+            stream_events = list(self._stream_events)
         return {
             "started_at": self.started_at,
             "total_sessions_started": self.total_sessions_started,
@@ -118,6 +149,8 @@ class RuntimeMetricsStore:
             "last_routed_agent": self.last_routed_agent,
             "last_error": self.last_error,
             "sessions_by_agent": dict(self.sessions_by_agent),
+            "_stream_events": stream_events,
+            "_metrics_stream_overflow_since_drain": self._metrics_stream_overflow_since_drain,
         }
 
     def __setstate__(self, state: Mapping[str, object]) -> None:
@@ -130,7 +163,23 @@ class RuntimeMetricsStore:
             str(key): int(value)
             for key, value in dict(state["sessions_by_agent"]).items()
         }
+        raw_events = state.get("_stream_events", [])
+        self._stream_events = deque(raw_events)
+        self._metrics_stream_overflow_since_drain = int(
+            state.get("_metrics_stream_overflow_since_drain", 0)
+        )
         self._lock = Lock()
+
+    def _append_stream_event_locked(self, event: MetricsStreamEvent) -> None:
+        if len(self._stream_events) >= _STREAM_EVENTS_MAXLEN:
+            self._metrics_stream_overflow_since_drain += 1
+            logger.warning(
+                "metrics stream buffer full (%s events); dropping event %r",
+                _STREAM_EVENTS_MAXLEN,
+                event.get("event"),
+            )
+            return
+        self._stream_events.append(event)
 
     def record_session_started(self, agent_name: str) -> None:
         """Increment active counters for one routed session."""
@@ -139,6 +188,9 @@ class RuntimeMetricsStore:
             self.last_routed_agent = agent_name
             self.sessions_by_agent[agent_name] = (
                 self.sessions_by_agent.get(agent_name, 0) + 1
+            )
+            self._append_stream_event_locked(
+                {"event": "session_started", "agent": agent_name},
             )
 
     def record_session_finished(self, agent_name: str) -> None:
@@ -150,6 +202,9 @@ class RuntimeMetricsStore:
                 self.sessions_by_agent[agent_name] = next_value
             else:
                 self.sessions_by_agent.pop(agent_name, None)
+            self._append_stream_event_locked(
+                {"event": "session_finished", "agent": agent_name},
+            )
 
     def record_session_failure(self, agent_name: str, exc: BaseException) -> None:
         """Track a failed session attempt with the most recent error."""
@@ -157,6 +212,30 @@ class RuntimeMetricsStore:
             self.last_routed_agent = agent_name
             self.total_session_failures += 1
             self.last_error = f"{exc.__class__.__name__}: {exc}"
+            self._append_stream_event_locked(
+                {
+                    "event": "session_failed",
+                    "agent": agent_name,
+                    "error": f"{exc.__class__.__name__}: {exc}"[:500],
+                },
+            )
+
+    def drain_stream_events(self) -> list[MetricsStreamEvent]:
+        """Remove and return pending stream events for JSONL export (order preserved)."""
+        with self._lock:
+            out = list(self._stream_events)
+            self._stream_events.clear()
+            dropped = self._metrics_stream_overflow_since_drain
+            self._metrics_stream_overflow_since_drain = 0
+        if dropped > 0:
+            out.append(
+                {
+                    "event": "metrics_stream_overflow",
+                    "agent": "__openrtc__",
+                    "overflow_dropped": dropped,
+                },
+            )
+        return out
 
     def snapshot(self, *, registered_agents: int) -> PoolRuntimeSnapshot:
         """Return a typed snapshot for dashboards and automation."""
