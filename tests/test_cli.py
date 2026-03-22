@@ -228,6 +228,41 @@ def test_list_exits_cleanly_when_agents_dir_does_not_exist(
     assert "does not exist" in caplog.text
 
 
+def test_strip_openrtc_only_flags_for_livekit_removes_openrtc_options() -> None:
+    """LiveKit ``run_app`` must not see OpenRTC-only flags (see ``_livekit_sys_argv``)."""
+    from openrtc.cli_app import _strip_openrtc_only_flags_for_livekit
+
+    tail = [
+        "--agents-dir",
+        "./agents",
+        "--dashboard",
+        "--dashboard-refresh",
+        "2.0",
+        "--metrics-json-file",
+        "/tmp/m.json",
+        "--default-stt",
+        "x",
+        "--default-llm",
+        "y",
+        "--default-tts",
+        "z",
+        "--default-greeting",
+        "hi",
+        "--reload",
+        "--log-level",
+        "DEBUG",
+    ]
+    assert _strip_openrtc_only_flags_for_livekit(tail) == [
+        "--reload",
+        "--log-level",
+        "DEBUG",
+    ]
+    assert _strip_openrtc_only_flags_for_livekit(["--agents-dir=./a", "--reload"]) == [
+        "--reload"
+    ]
+    assert _strip_openrtc_only_flags_for_livekit([]) == []
+
+
 def test_cli_entrypoint_documents_optional_extra() -> None:
     from openrtc.cli import CLI_EXTRA_INSTALL_HINT
 

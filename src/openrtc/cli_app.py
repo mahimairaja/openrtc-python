@@ -251,15 +251,73 @@ def _pool_kwargs(
     }
 
 
+_OPENRTC_ONLY_FLAGS_WITH_VALUE: frozenset[str] = frozenset(
+    {
+        "--agents-dir",
+        "--default-stt",
+        "--default-llm",
+        "--default-tts",
+        "--default-greeting",
+        "--dashboard-refresh",
+        "--metrics-json-file",
+    }
+)
+_OPENRTC_ONLY_BOOL_FLAGS: frozenset[str] = frozenset({"--dashboard"})
+
+
+def _strip_openrtc_only_flags_for_livekit(argv_tail: list[str]) -> list[str]:
+    """Drop OpenRTC-only CLI flags; LiveKit's ``run_app`` parses ``sys.argv`` itself.
+
+    ``openrtc start`` / ``openrtc dev`` are implemented with Typer, then delegate to
+    :func:`livekit.agents.cli.run_app`, which builds a separate Typer application
+    that does not recognize OpenRTC options such as ``--agents-dir``. Those must
+    be removed before the handoff while preserving any forwarded LiveKit flags
+    (e.g. ``--reload``, ``--url``) when we add pass-through options later.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(argv_tail):
+        arg = argv_tail[i]
+        if arg == "--":
+            out.extend(argv_tail[i:])
+            break
+        if "=" in arg:
+            name = arg.split("=", 1)[0]
+            if (
+                name in _OPENRTC_ONLY_FLAGS_WITH_VALUE
+                or name in _OPENRTC_ONLY_BOOL_FLAGS
+            ):
+                i += 1
+                continue
+            out.append(arg)
+            i += 1
+            continue
+        if arg in _OPENRTC_ONLY_BOOL_FLAGS:
+            i += 1
+            continue
+        if arg in _OPENRTC_ONLY_FLAGS_WITH_VALUE:
+            i += 1
+            if i < len(argv_tail) and not argv_tail[i].startswith("--"):
+                i += 1
+            continue
+        out.append(arg)
+        i += 1
+    return out
+
+
 def _livekit_sys_argv(subcommand: str) -> None:
-    """Set ``sys.argv`` for ``livekit.agents.cli.run_app`` without dropping user flags.
+    """Set ``sys.argv`` for ``livekit.agents.cli.run_app``.
+
+    OpenRTC-specific options are stripped because the LiveKit CLI re-parses
+    ``sys.argv`` and only accepts its own flags per subcommand.
 
     When the process was not started as ``openrtc <subcommand> ...`` (e.g. tests
     that patch ``sys.argv``), only ``[argv0, subcommand]`` is used.
     """
     prog = sys.argv[0]
     if len(sys.argv) >= 2 and sys.argv[1] == subcommand:
-        sys.argv = [prog, subcommand, *sys.argv[2:]]
+        rest = _strip_openrtc_only_flags_for_livekit(list(sys.argv[2:]))
+        sys.argv = [prog, subcommand, *rest]
     else:
         sys.argv = [prog, subcommand]
 
