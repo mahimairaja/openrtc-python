@@ -27,6 +27,11 @@ from openrtc.resources import (
 
 logger = logging.getLogger("openrtc")
 
+try:
+    from openai import NotGiven as _OpenAINotGiven
+except ImportError:  # pragma: no cover - optional when openai is absent
+    _OpenAINotGiven = None
+
 _AgentType = TypeVar("_AgentType", bound=type[Agent])
 _AGENT_METADATA_ATTR = "__openrtc_agent_config__"
 _METADATA_AGENT_KEYS = ("agent", "demo")
@@ -619,7 +624,14 @@ def _filter_provider_kwargs(options: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _is_not_given(value: Any) -> bool:
-    return repr(value) == "NOT_GIVEN"
+    """True if ``value`` is OpenAI's ``NotGiven`` (unset optional on plugin ``_opts``)."""
+    if _OpenAINotGiven is not None and isinstance(value, _OpenAINotGiven):
+        return True
+    cls = type(value)
+    if cls.__name__ != "NotGiven":
+        return False
+    module = getattr(cls, "__module__", "")
+    return module == "openai._types" or module.startswith("openai.")
 
 
 def _build_session_kwargs(
