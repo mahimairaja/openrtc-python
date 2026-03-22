@@ -244,10 +244,13 @@ def test_download_files_has_minimal_options_no_provider_defaults(
             "--default-stt",
             "deepgram/x",
         ],
+        # Rich wraps error text to COLUMNS from the environment; CI often sets a
+        # narrow width, which splits the flag across ANSI segments so the literal
+        # substring "default-stt" disappears.
+        env={"COLUMNS": "160", "LINES": "50"},
     )
     assert result.exit_code == 2
     out = (result.stdout or "") + (result.stderr or "")
-    # Option name is stable; the "No such option" prefix is gettext-translated on non-English locales.
     assert "default-stt" in out
 
 
