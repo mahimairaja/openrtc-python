@@ -77,6 +77,36 @@ def test_parse_metrics_jsonl_line() -> None:
     assert parse_metrics_jsonl_line('{"schema_version": 999}') is None
 
 
+def test_parse_metrics_jsonl_line_rejects_bool_wall_time() -> None:
+    bad = json.dumps(
+        {
+            "schema_version": METRICS_STREAM_SCHEMA_VERSION,
+            "kind": KIND_SNAPSHOT,
+            "seq": 1,
+            "wall_time_unix": True,
+            "payload": {},
+        }
+    )
+    assert parse_metrics_jsonl_line(bad) is None
+
+
+def test_jsonl_sink_seq_property(
+    tmp_path: Path,
+    minimal_pool_runtime_snapshot: PoolRuntimeSnapshot,
+) -> None:
+    """Cover :attr:`JsonlMetricsSink.seq` (lock + counter)."""
+    snap = minimal_pool_runtime_snapshot
+    path = tmp_path / "seq.jsonl"
+    sink = JsonlMetricsSink(path)
+    sink.open()
+    assert sink.seq == 0
+    sink.write_snapshot(snap)
+    assert sink.seq == 1
+    sink.write_event({"event": "x"})
+    assert sink.seq == 2
+    sink.close()
+
+
 def test_parse_metrics_jsonl_line_rejects_malformed_envelope() -> None:
     base = {
         "schema_version": METRICS_STREAM_SCHEMA_VERSION,

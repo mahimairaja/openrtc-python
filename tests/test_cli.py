@@ -326,6 +326,7 @@ def test_dev_passes_reload_through_argv_strip(
     agents.mkdir()
     stub_pool = StubPool(discovered=[StubConfig(name="a", agent_cls=StubAgent)])
     monkeypatch.setattr(cli_app_mod, "AgentPool", lambda **kwargs: stub_pool)
+
     def _run_pool_stub(pool: StubPool, **kwargs: Any) -> None:
         pool.run()
 
