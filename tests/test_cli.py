@@ -245,9 +245,10 @@ def test_download_files_has_minimal_options_no_provider_defaults(
             "deepgram/x",
         ],
     )
-    assert result.exit_code != 0
+    assert result.exit_code == 2
     out = (result.stdout or "") + (result.stderr or "")
-    assert "No such option" in out and "default-stt" in out
+    # Option name is stable; the "No such option" prefix is gettext-translated on non-English locales.
+    assert "default-stt" in out
 
 
 def test_list_exits_cleanly_when_agents_dir_does_not_exist(
