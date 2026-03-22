@@ -396,7 +396,7 @@ When in doubt:
 
 ### Services overview
 
-**OpenRTC** is a single Python package (`src/openrtc/`) with no runtime services required for development. All tests use stubs/mocks for LiveKit (see `tests/conftest.py`), so no LiveKit server, API keys, or external providers are needed to run the test suite.
+**OpenRTC** is a single Python package (`src/openrtc/`) with no runtime services required for development. Normal `uv sync` installs the real `livekit-agents` wheel, so tests run against the actual SDK. A fallback shim in `tests/conftest.py` only applies when `livekit.agents` cannot be imported. No LiveKit server, API keys, or external *providers* are needed to run the test suite.
 
 ### Common dev commands
 
@@ -411,7 +411,7 @@ All commands are documented in `CONTRIBUTING.md`. Quick reference:
 
 ### Non-obvious notes
 
-- The `tests/conftest.py` creates a fake `livekit.agents` module when the real one isn't importable. This allows tests to run without the full LiveKit SDK. The real SDK *is* installed by `uv sync`, but if you see import weirdness in tests, this shim is the reason.
+- The `tests/conftest.py` shim targets the `livekit-agents` pin in `pyproject.toml` (~1.4.x today) and only implements APIs OpenRTC uses. When upgrading LiveKit or adding new `livekit.agents` usage, extend the shim or confirm tests pass with the real SDK (`uv sync` + `uv run pytest`). If imports behave oddly, check whether the shim path is active vs. the real package.
 - Version is derived from git tags via `hatch-vcs`. In a dev checkout the version will be something like `0.0.9.dev0+g<hash>`.
 - `mypy` is enforced in CI alongside Ruff; run `uv run mypy src/` before pushing type-sensitive changes.
 - Running `openrtc start` or `openrtc dev` requires a running LiveKit server and provider API keys. For development validation, use `openrtc list` which exercises discovery and routing without network dependencies. The optional sidecar metrics TUI (`openrtc tui --watch`, requires `openrtc[tui]` / dev deps) tails `--metrics-jsonl` from a worker in another terminal.

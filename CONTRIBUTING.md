@@ -31,6 +31,14 @@ but `uv` is the preferred workflow for contributors.
 uv run pytest
 ```
 
+With `uv sync --group dev`, the real `livekit-agents` package is installed, so
+pytest uses the upstream SDK—not the fallback shim in `tests/conftest.py`. That
+shim only loads when `livekit.agents` is missing (minimal or broken installs). It
+is hand-maintained to match APIs OpenRTC uses; when you upgrade the
+`livekit-agents` pin in `pyproject.toml` or add new LiveKit imports in `src/`,
+re-run the full suite locally and update `conftest.py` if anything still relies
+on the stub.
+
 ### Run Ruff lint checks
 
 ```bash
