@@ -1662,7 +1662,9 @@ cli = [
     { name = "typer" },
 ]
 tui = [
+    { name = "rich" },
     { name = "textual" },
+    { name = "typer" },
 ]
 
 [package.dev-dependencies]
@@ -1683,8 +1685,10 @@ dev = [
 requires-dist = [
     { name = "livekit-agents", extras = ["openai", "silero", "turn-detector"], specifier = "~=1.4" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
+    { name = "rich", marker = "extra == 'tui'", specifier = ">=13" },
     { name = "textual", marker = "extra == 'tui'", specifier = ">=0.47,<2" },
     { name = "typer", marker = "extra == 'cli'", specifier = ">=0.12" },
+    { name = "typer", marker = "extra == 'tui'", specifier = ">=0.12" },
 ]
 provides-extras = ["cli", "tui"]
 
