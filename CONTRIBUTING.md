@@ -59,6 +59,9 @@ CI runs `mypy src/` on pull requests (see `.github/workflows/lint.yml`). Locally
 uv run mypy src/
 ```
 
+The wheel and sdist ship `src/openrtc/py.typed` (empty PEP 561 marker) so tools
+like mypy and pyright treat `openrtc` as a typed dependency.
+
 ## Project architecture
 
 Keep these responsibilities in mind when contributing:
