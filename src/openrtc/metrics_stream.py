@@ -40,6 +40,17 @@ def snapshot_envelope(*, seq: int, snapshot: PoolRuntimeSnapshot) -> dict[str, A
     }
 
 
+def _metrics_json_seq_ok(value: object) -> bool:
+    """``seq`` must be a JSON integer (reject bool, which subclasses int)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _metrics_json_wall_ok(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, (int, float))
+
+
 def parse_metrics_jsonl_line(line: str) -> dict[str, Any] | None:
     """Return a parsed stream record (snapshot or event), or ``None`` if invalid."""
     stripped = line.strip()
@@ -53,6 +64,15 @@ def parse_metrics_jsonl_line(line: str) -> dict[str, Any] | None:
         return None
     kind = record.get("kind")
     if kind not in (KIND_SNAPSHOT, KIND_EVENT):
+        return None
+    seq = record.get("seq")
+    if not _metrics_json_seq_ok(seq):
+        return None
+    wall = record.get("wall_time_unix")
+    if not _metrics_json_wall_ok(wall):
+        return None
+    payload = record.get("payload")
+    if payload is None or not isinstance(payload, dict):
         return None
     return record
 

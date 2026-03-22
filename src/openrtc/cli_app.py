@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -16,6 +18,7 @@ from rich.panel import Panel
 from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.text import Text
+from typer import Context
 
 from openrtc.metrics_stream import JsonlMetricsSink
 from openrtc.pool import AgentConfig, AgentPool
@@ -408,24 +411,48 @@ def _livekit_sys_argv(subcommand: str) -> None:
         sys.argv = [prog, subcommand]
 
 
-def _apply_optional_livekit_connection_env(
+_LIVEKIT_ENV_OVERRIDE_KEYS: tuple[str, ...] = (
+    "LIVEKIT_URL",
+    "LIVEKIT_API_KEY",
+    "LIVEKIT_API_SECRET",
+    "LIVEKIT_LOG_LEVEL",
+)
+
+
+def _snapshot_livekit_env() -> dict[str, str | None]:
+    return {key: os.environ.get(key) for key in _LIVEKIT_ENV_OVERRIDE_KEYS}
+
+
+def _restore_livekit_env(snapshot: dict[str, str | None]) -> None:
+    for key, previous in snapshot.items():
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+
+@contextlib.contextmanager
+def _livekit_env_overrides(
     *,
     url: str | None,
     api_key: str | None,
     api_secret: str | None,
-) -> None:
-    """Mirror LiveKit CLI env vars when the user passes connection flags on OpenRTC."""
-    if url is not None:
-        os.environ["LIVEKIT_URL"] = url
-    if api_key is not None:
-        os.environ["LIVEKIT_API_KEY"] = api_key
-    if api_secret is not None:
-        os.environ["LIVEKIT_API_SECRET"] = api_secret
-
-
-def _apply_optional_livekit_log_level(log_level: str | None) -> None:
-    if log_level is not None:
-        os.environ["LIVEKIT_LOG_LEVEL"] = log_level
+    log_level: str | None,
+) -> Iterator[None]:
+    """Temporarily set LiveKit env vars; restore previous values on exit."""
+    snapshot = _snapshot_livekit_env()
+    try:
+        if url is not None:
+            os.environ["LIVEKIT_URL"] = url
+        if api_key is not None:
+            os.environ["LIVEKIT_API_KEY"] = api_key
+        if api_secret is not None:
+            os.environ["LIVEKIT_API_SECRET"] = api_secret
+        if log_level is not None:
+            os.environ["LIVEKIT_LOG_LEVEL"] = log_level
+        yield
+    finally:
+        _restore_livekit_env(snapshot)
 
 
 def _delegate_discovered_pool_to_livekit(
@@ -451,19 +478,18 @@ def _delegate_discovered_pool_to_livekit(
         **_pool_kwargs(default_stt, default_llm, default_tts, default_greeting)
     )
     _discover_or_exit(agents_dir, pool)
-    _apply_optional_livekit_connection_env(
-        url=url, api_key=api_key, api_secret=api_secret
-    )
-    _apply_optional_livekit_log_level(log_level)
-    _livekit_sys_argv(subcommand)
-    _run_pool_with_reporting(
-        pool,
-        dashboard=dashboard,
-        dashboard_refresh=dashboard_refresh,
-        metrics_json_file=metrics_json_file,
-        metrics_jsonl=metrics_jsonl,
-        metrics_jsonl_interval=metrics_jsonl_interval,
-    )
+    with _livekit_env_overrides(
+        url=url, api_key=api_key, api_secret=api_secret, log_level=log_level
+    ):
+        _livekit_sys_argv(subcommand)
+        _run_pool_with_reporting(
+            pool,
+            dashboard=dashboard,
+            dashboard_refresh=dashboard_refresh,
+            metrics_json_file=metrics_json_file,
+            metrics_jsonl=metrics_jsonl,
+            metrics_jsonl_interval=metrics_jsonl_interval,
+        )
 
 
 def _run_connect_handoff(
@@ -490,24 +516,24 @@ def _run_connect_handoff(
         **_pool_kwargs(default_stt, default_llm, default_tts, default_greeting)
     )
     _discover_or_exit(agents_dir, pool)
-    _apply_optional_livekit_connection_env(
-        url=url, api_key=api_key, api_secret=api_secret
-    )
-    prog = sys.argv[0]
-    tail: list[str] = ["connect", "--room", room]
-    if participant_identity is not None:
-        tail.extend(["--participant-identity", participant_identity])
-    if log_level is not None:
-        tail.extend(["--log-level", log_level])
-    sys.argv = [prog, *tail]
-    _run_pool_with_reporting(
-        pool,
-        dashboard=dashboard,
-        dashboard_refresh=dashboard_refresh,
-        metrics_json_file=metrics_json_file,
-        metrics_jsonl=metrics_jsonl,
-        metrics_jsonl_interval=metrics_jsonl_interval,
-    )
+    with _livekit_env_overrides(
+        url=url, api_key=api_key, api_secret=api_secret, log_level=None
+    ):
+        prog = sys.argv[0]
+        tail: list[str] = ["connect", "--room", room]
+        if participant_identity is not None:
+            tail.extend(["--participant-identity", participant_identity])
+        if log_level is not None:
+            tail.extend(["--log-level", log_level])
+        sys.argv = [prog, *tail]
+        _run_pool_with_reporting(
+            pool,
+            dashboard=dashboard,
+            dashboard_refresh=dashboard_refresh,
+            metrics_json_file=metrics_json_file,
+            metrics_jsonl=metrics_jsonl,
+            metrics_jsonl_interval=metrics_jsonl_interval,
+        )
 
 
 def _discover_or_exit(agents_dir: Path, pool: AgentPool) -> list[AgentConfig]:
@@ -923,8 +949,15 @@ def _build_list_json_payload(
     return payload
 
 
-@app.command("start")
+_LIVEKIT_CLI_CONTEXT_SETTINGS = {
+    "allow_extra_args": True,
+    "ignore_unknown_options": True,
+}
+
+
+@app.command("start", context_settings=_LIVEKIT_CLI_CONTEXT_SETTINGS)
 def start_command(
+    _ctx: Context,
     agents_dir: AgentsDirArg,
     default_stt: DefaultSttArg = None,
     default_llm: DefaultLlmArg = None,
@@ -960,8 +993,9 @@ def start_command(
     )
 
 
-@app.command("dev")
+@app.command("dev", context_settings=_LIVEKIT_CLI_CONTEXT_SETTINGS)
 def dev_command(
+    _ctx: Context,
     agents_dir: AgentsDirArg,
     default_stt: DefaultSttArg = None,
     default_llm: DefaultLlmArg = None,
@@ -997,8 +1031,9 @@ def dev_command(
     )
 
 
-@app.command("console")
+@app.command("console", context_settings=_LIVEKIT_CLI_CONTEXT_SETTINGS)
 def console_command(
+    _ctx: Context,
     agents_dir: AgentsDirArg,
     default_stt: DefaultSttArg = None,
     default_llm: DefaultLlmArg = None,
@@ -1034,8 +1069,9 @@ def console_command(
     )
 
 
-@app.command("connect")
+@app.command("connect", context_settings=_LIVEKIT_CLI_CONTEXT_SETTINGS)
 def connect_command(
+    _ctx: Context,
     agents_dir: AgentsDirArg,
     room: ConnectRoomArg,
     default_stt: DefaultSttArg = None,

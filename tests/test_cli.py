@@ -4,6 +4,7 @@ import builtins
 import importlib
 import json
 import logging
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -313,6 +314,61 @@ def test_strip_openrtc_only_flags_for_livekit_removes_openrtc_options() -> None:
     assert _strip_openrtc_only_flags_for_livekit(
         ["--metrics-json-file", "--not-a-flag", "--reload"],
     ) == ["--reload"]
+
+
+def test_dev_passes_reload_through_argv_strip(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import openrtc.cli_app as cli_app_mod
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    stub_pool = StubPool(discovered=[StubConfig(name="a", agent_cls=StubAgent)])
+    monkeypatch.setattr(cli_app_mod, "AgentPool", lambda **kwargs: stub_pool)
+    def _run_pool_stub(pool: StubPool, **kwargs: Any) -> None:
+        pool.run()
+
+    monkeypatch.setattr(cli_app_mod, "_run_pool_with_reporting", _run_pool_stub)
+    real_strip = cli_app_mod._strip_openrtc_only_flags_for_livekit
+    recorded: list[tuple[list[str], list[str]]] = []
+
+    def recording_strip(tail: list[str]) -> list[str]:
+        out = real_strip(tail)
+        recorded.append((list(tail), list(out)))
+        return out
+
+    monkeypatch.setattr(
+        cli_app_mod,
+        "_strip_openrtc_only_flags_for_livekit",
+        recording_strip,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["openrtc", "dev", "--agents-dir", str(agents), "--reload"],
+    )
+    exit_code = main(["dev", "--agents-dir", str(agents), "--reload"])
+    assert exit_code == 0
+    assert stub_pool.run_called
+    assert recorded
+    assert recorded[0][1] == ["--reload"]
+
+
+def test_livekit_env_restored_after_delegate_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import openrtc.cli_app as cli_app_mod
+
+    stub_pool = StubPool(discovered=[StubConfig(name="a", agent_cls=StubAgent)])
+    monkeypatch.setattr(cli_app_mod, "AgentPool", lambda **kwargs: stub_pool)
+    monkeypatch.setattr(cli_app_mod, "_run_pool_with_reporting", lambda *a, **k: None)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://persist")
+    exit_code = main(
+        ["start", "--agents-dir", "./agents", "--url", "ws://temporary-override"],
+    )
+    assert exit_code == 0
+    assert os.environ.get("LIVEKIT_URL") == "ws://persist"
 
 
 def test_cli_entrypoint_documents_optional_extra() -> None:

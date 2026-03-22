@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -25,6 +26,8 @@ class MetricsTuiApp(App[None]):
         self._buf = ""
         self._latest: dict[str, Any] | None = None
         self._last_event: dict[str, Any] | None = None
+        self._path_st_ino: int | None = None
+        self._path_st_dev: int | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -41,9 +44,7 @@ class MetricsTuiApp(App[None]):
         self._path.parent.mkdir(parents=True, exist_ok=True)
         if not self._path.exists():
             self._path.touch()
-        self._fh = self._path.open("r", encoding="utf-8")
-        if not self._from_start:
-            self._fh.seek(0, 2)
+        self._open_metrics_file()
         self.set_interval(0.25, self._poll_file)
 
     def on_unmount(self) -> None:
@@ -51,7 +52,44 @@ class MetricsTuiApp(App[None]):
             self._fh.close()
             self._fh = None
 
+    def _capture_path_identity(self, st: os.stat_result) -> None:
+        self._path_st_ino = st.st_ino
+        self._path_st_dev = st.st_dev
+
+    def _open_metrics_file(self) -> None:
+        if self._fh is not None:
+            self._fh.close()
+            self._fh = None
+        self._buf = ""
+        self._fh = self._path.open("r", encoding="utf-8")
+        if self._from_start:
+            self._fh.seek(0)
+        else:
+            self._fh.seek(0, 2)
+        st = os.stat(self._path)
+        self._capture_path_identity(st)
+
+    def _sync_metrics_file_handle(self) -> None:
+        """Reopen the reader after truncation or path replacement so new bytes are visible."""
+        try:
+            st = os.stat(self._path)
+        except OSError:
+            return
+        if self._fh is None:
+            self._open_metrics_file()
+            return
+        pos = self._fh.tell()
+        identity_ok = (
+            self._path_st_ino is not None
+            and self._path_st_dev is not None
+            and st.st_ino == self._path_st_ino
+            and st.st_dev == self._path_st_dev
+        )
+        if not identity_ok or st.st_size < pos:
+            self._open_metrics_file()
+
     def _poll_file(self) -> None:
+        self._sync_metrics_file_handle()
         if self._fh is None:
             return
         chunk = self._fh.read()

@@ -75,3 +75,29 @@ async def test_metrics_tui_displays_snapshot_line(
         text = str(status.renderable)
         assert "seq=1" in text
         assert "registered=1" in text
+
+
+@pytest.mark.asyncio
+async def test_metrics_tui_reopens_after_writer_truncates_file(
+    tmp_path,
+    minimal_pool_runtime_snapshot: PoolRuntimeSnapshot,
+) -> None:
+    from openrtc.tui_app import MetricsTuiApp
+
+    path = tmp_path / "rot.jsonl"
+    snap = minimal_pool_runtime_snapshot
+    first = json.dumps(snapshot_envelope(seq=1, snapshot=snap), sort_keys=True)
+    path.write_text(first + "\n", encoding="utf-8")
+
+    app = MetricsTuiApp(path, from_start=True)
+    async with app.run_test() as pilot:
+        app._poll_file()
+        await pilot.pause()
+        assert "seq=1" in str(app.query_one("#status").renderable)
+
+        path.unlink()
+        second = json.dumps(snapshot_envelope(seq=2, snapshot=snap), sort_keys=True)
+        path.write_text(second + "\n", encoding="utf-8")
+        app._poll_file()
+        await pilot.pause()
+        assert "seq=2" in str(app.query_one("#status").renderable)

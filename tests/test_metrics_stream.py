@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -76,6 +77,24 @@ def test_parse_metrics_jsonl_line() -> None:
     assert parse_metrics_jsonl_line('{"schema_version": 999}') is None
 
 
+def test_parse_metrics_jsonl_line_rejects_malformed_envelope() -> None:
+    base = {
+        "schema_version": METRICS_STREAM_SCHEMA_VERSION,
+        "kind": KIND_SNAPSHOT,
+        "seq": 1,
+        "wall_time_unix": 1.0,
+        "payload": {"x": 1},
+    }
+    bad_seq = {**base, "seq": True}
+    assert parse_metrics_jsonl_line(json.dumps(bad_seq)) is None
+    bad_wall = {**base, "wall_time_unix": None}
+    assert parse_metrics_jsonl_line(json.dumps(bad_wall)) is None
+    bad_payload = {**base, "payload": None}
+    assert parse_metrics_jsonl_line(json.dumps(bad_payload)) is None
+    bad_payload2 = {**base, "payload": [1, 2]}
+    assert parse_metrics_jsonl_line(json.dumps(bad_payload2)) is None
+
+
 def test_parse_metrics_jsonl_line_rejects_unknown_kind() -> None:
     bad = json.dumps(
         {
@@ -141,6 +160,27 @@ def test_runtime_metrics_store_drains_stream_events() -> None:
     store.record_session_started("dental")
     drained = store.drain_stream_events()
     assert drained == [{"event": "session_started", "agent": "dental"}]
+    assert store.drain_stream_events() == []
+
+
+def test_runtime_metrics_store_overflow_emits_synthetic_on_drain(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from openrtc import resources as resources_mod
+    from openrtc.resources import RuntimeMetricsStore
+
+    monkeypatch.setattr(resources_mod, "_STREAM_EVENTS_MAXLEN", 3)
+    store = RuntimeMetricsStore()
+    with caplog.at_level(logging.WARNING, logger="openrtc"):
+        for _ in range(6):
+            store.record_session_started("x")
+    drained = store.drain_stream_events()
+    assert len([e for e in drained if e.get("event") == "session_started"]) == 3
+    overflow_rows = [e for e in drained if e.get("event") == "metrics_stream_overflow"]
+    assert len(overflow_rows) == 1
+    assert overflow_rows[0].get("overflow_dropped") == 3
+    assert "metrics stream buffer full" in caplog.text
     assert store.drain_stream_events() == []
 
 

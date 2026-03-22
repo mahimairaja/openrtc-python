@@ -22,12 +22,14 @@ class MetricsStreamEvent(TypedDict, total=False):
     """One drained session lifecycle row for JSONL export.
 
     Rows always include ``event`` and ``agent`` from the store; ``session_failed``
-    rows may include ``error``.
+    rows may include ``error``. A synthetic ``metrics_stream_overflow`` row may
+    include ``overflow_dropped``.
     """
 
     event: str
     agent: str
     error: str
+    overflow_dropped: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +127,13 @@ class RuntimeMetricsStore:
     sessions_by_agent: dict[str, int] = field(default_factory=dict)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
     _stream_events: deque[MetricsStreamEvent] = field(
-        default_factory=lambda: deque(maxlen=_STREAM_EVENTS_MAXLEN),
+        default_factory=deque,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _metrics_stream_overflow_since_drain: int = field(
+        default=0,
         init=False,
         repr=False,
         compare=False,
@@ -142,6 +150,7 @@ class RuntimeMetricsStore:
             "last_error": self.last_error,
             "sessions_by_agent": dict(self.sessions_by_agent),
             "_stream_events": stream_events,
+            "_metrics_stream_overflow_since_drain": self._metrics_stream_overflow_since_drain,
         }
 
     def __setstate__(self, state: Mapping[str, object]) -> None:
@@ -155,8 +164,22 @@ class RuntimeMetricsStore:
             for key, value in dict(state["sessions_by_agent"]).items()
         }
         raw_events = state.get("_stream_events", [])
-        self._stream_events = deque(raw_events, maxlen=_STREAM_EVENTS_MAXLEN)
+        self._stream_events = deque(raw_events)
+        self._metrics_stream_overflow_since_drain = int(
+            state.get("_metrics_stream_overflow_since_drain", 0)
+        )
         self._lock = Lock()
+
+    def _append_stream_event_locked(self, event: MetricsStreamEvent) -> None:
+        if len(self._stream_events) >= _STREAM_EVENTS_MAXLEN:
+            self._metrics_stream_overflow_since_drain += 1
+            logger.warning(
+                "metrics stream buffer full (%s events); dropping event %r",
+                _STREAM_EVENTS_MAXLEN,
+                event.get("event"),
+            )
+            return
+        self._stream_events.append(event)
 
     def record_session_started(self, agent_name: str) -> None:
         """Increment active counters for one routed session."""
@@ -166,7 +189,7 @@ class RuntimeMetricsStore:
             self.sessions_by_agent[agent_name] = (
                 self.sessions_by_agent.get(agent_name, 0) + 1
             )
-            self._stream_events.append(
+            self._append_stream_event_locked(
                 {"event": "session_started", "agent": agent_name},
             )
 
@@ -179,7 +202,7 @@ class RuntimeMetricsStore:
                 self.sessions_by_agent[agent_name] = next_value
             else:
                 self.sessions_by_agent.pop(agent_name, None)
-            self._stream_events.append(
+            self._append_stream_event_locked(
                 {"event": "session_finished", "agent": agent_name},
             )
 
@@ -189,7 +212,7 @@ class RuntimeMetricsStore:
             self.last_routed_agent = agent_name
             self.total_session_failures += 1
             self.last_error = f"{exc.__class__.__name__}: {exc}"
-            self._stream_events.append(
+            self._append_stream_event_locked(
                 {
                     "event": "session_failed",
                     "agent": agent_name,
@@ -202,6 +225,16 @@ class RuntimeMetricsStore:
         with self._lock:
             out = list(self._stream_events)
             self._stream_events.clear()
+            dropped = self._metrics_stream_overflow_since_drain
+            self._metrics_stream_overflow_since_drain = 0
+        if dropped > 0:
+            out.append(
+                {
+                    "event": "metrics_stream_overflow",
+                    "agent": "__openrtc__",
+                    "overflow_dropped": dropped,
+                },
+            )
         return out
 
     def snapshot(self, *, registered_agents: int) -> PoolRuntimeSnapshot:
