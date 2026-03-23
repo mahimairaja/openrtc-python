@@ -16,6 +16,16 @@ Changes that have landed on `main` but have not yet been tagged for release.
 
 <!-- releases -->
 
+## [0.0.16] - 2026-03-23
+
+## What's Changed
+* DX improvements: uv CI, DeprecationWarning for legacy session_kwargs, CHANGELOG, issue templates, Makefile, .env.example by @Copilot in https://github.com/mahimairaja/openrtc-python/pull/26
+
+
+**Full Changelog**: https://github.com/mahimairaja/openrtc-python/compare/v0.0.15...v0.0.16
+
+---
+
 ## [0.0.15] - 2026-03-22
 
 ### Fixed
